@@ -270,7 +270,11 @@ trait CommonProtocol
 		$line->desc = $langs->trans("Description") . " 1";
 		$line->qty = 5;
 		$line->subprice = 100.05;		// unit price (no discount yet)
-		$line->tva_tx = get_default_tva($thirdpartySeller, $thirdpartyBuyer);
+		// get_default_tva() requires Societe objects (strictly typed in core, no null allowed on PHP 8+).
+		// For the specimen, fall back to our own company ($mysoc) when no third party is provided.
+		$sampleSeller = ($thirdpartySeller instanceof Societe) ? $thirdpartySeller : $mysoc;
+		$sampleBuyer = ($thirdpartyBuyer instanceof Societe) ? $thirdpartyBuyer : $mysoc;
+		$line->tva_tx = get_default_tva($sampleSeller, $sampleBuyer);
 		$line->localtax1_tx = 0;
 		$line->localtax2_tx = 0;
 		$line->remise_percent = 10;
@@ -421,6 +425,18 @@ trait CommonProtocol
 
 		$sellerCountryCode = $sellerInfo['sellercountry'] ?? '';
 
+		// The legal id (e.g. SIREN) is often carried only in the SpecifiedLegalOrganization
+		// (sellerLegalOrgId/Scheme) and left out of sellerGlobalIds. Merge it in so the lookup,
+		// update and creation steps below all populate the matching idprof field (e.g. idprof1).
+		if (!empty($sellerInfo['sellerLegalOrgId']) && !empty($sellerInfo['sellerLegalOrgScheme'])) {
+			if (empty($sellerInfo['sellerGlobalIds']) || !is_array($sellerInfo['sellerGlobalIds'])) {
+				$sellerInfo['sellerGlobalIds'] = array();
+			}
+			if (empty($sellerInfo['sellerGlobalIds'][$sellerInfo['sellerLegalOrgScheme']])) {
+				$sellerInfo['sellerGlobalIds'][$sellerInfo['sellerLegalOrgScheme']] = $sellerInfo['sellerLegalOrgId'];
+			}
+		}
+
 		// Step 1: Try to find thirdparty by global IDs
 		if (!empty($sellerInfo['sellerGlobalIds']) && is_array($sellerInfo['sellerGlobalIds'])) {
 			foreach ($sellerInfo['sellerGlobalIds'] as $idScheme => $globalId) {
@@ -462,7 +478,7 @@ trait CommonProtocol
 		// Step 2: Try to find using VAT number if not found by global IDs
 		if ($thirdpartyId < 0) {
 			if (!empty($sellerInfo['sellerTaxRegistations']['VA'])) {
-				$sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "societe WHERE REPLACE(tva_intra, ' ', '') = '" . $db->escape($einvoicing->removeSpaces($sellerInfo['sellerTaxRegistations']['VA'])) . "' AND entity = ".$conf->entity;
+				$sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "societe WHERE REPLACE(tva_intra, ' ', '') = '" . $db->escape($einvoicing->removeSpaces($sellerInfo['sellerTaxRegistations']['VA'])) . "' AND entity IN (". getEntity('societe').")";
 				$resql = $db->query($sql);
 				if ($resql) {
 					if ($db->num_rows($resql) > 1) {
@@ -523,7 +539,8 @@ trait CommonProtocol
 			}
 
 			if ($result > 0) {
-				$thirdpartyId = $thirdparty->id;
+				// findNearest() RETURNS the rowid (it does not populate $thirdparty->id).
+				$thirdpartyId = $result;
 				dol_syslog(get_class($this) . '::_syncOrCreateThirdpartyFromEInvoiceSeller Found thirdparty by findNearest: ' . $thirdpartyId);
 			}
 		}
@@ -1087,6 +1104,7 @@ trait CommonProtocol
 		$map = [
 			'0002' => 'idprof1',	// SIREN
 			'0225' => 'idprof1',	// SIREN
+			'0009' => 'idprof2',	// SIRET
 		];
 
 		return $map[$scheme] ?? '';

@@ -429,6 +429,15 @@ abstract class AbstractPDPProvider
 
 		// Build service name depending on environment
 		$serviceName = $this->config['dol_prefix'] . '_' . ($this->config['live'] ? 'PROD' : 'TEST');
+		// For backward compatibility with Dolibarr versions < 23.0.0
+
+		if (version_compare(DOL_VERSION, '23.0.0', '<')) {
+			require_once DOL_DOCUMENT_ROOT."/core/lib/admin.lib.php";
+			dolibarr_del_const($this->db, $serviceName.'_TOKEN', $conf->entity);
+			dolibarr_del_const($this->db, $serviceName.'_REFRESH', $conf->entity);
+			dolibarr_del_const($this->db, $serviceName.'_EXPIRE', $conf->entity);
+			return true;
+		}
 
 		// Check if a token already exists for this service
 		$sql_check = "DELETE FROM ".MAIN_DB_PREFIX."oauth_token
@@ -518,7 +527,8 @@ abstract class AbstractPDPProvider
 		if (!isset($object->thirdparty->id)) {
 			$object->fetch_thirdparty();
 		}
-		$actioncomm->socid = $object->thirdparty->id;
+		// $object->thirdparty may still be null (e.g. document/flow with no resolvable socid)
+		$actioncomm->socid = is_object($object->thirdparty ?? null) ? $object->thirdparty->id : 0;
 		$actioncomm->label = $eventLabel;
 		$actioncomm->note_private = $eventMesg;
 		$actioncomm->fk_project = $object->fk_project;
