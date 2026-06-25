@@ -65,7 +65,7 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 		$error = 0;
 
 		// THIRD PARTIES
-		if ($action == 'COMPANY_CREATE') {
+		if ($action == 'COMPANY_CREATE' || $action == 'COMPANY_MODIFY') {
 			/** @var Societe $object */
 			$einvoicing = new EInvoicing($this->db);
 
@@ -240,6 +240,10 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 
 		// EINVOICING DOCUMENTS
 		if ($action == 'DOCUMENT_DELETE') {
+			/**
+			 * @var Document $object
+			 */
+			'@phan-var-force Document $object';
 			if ($object->fk_element_type == 'invoice_supplier' && SupplierInvoiceHelper::isEInvoice($object->fk_element_id, true)) {
 				$this->errors[] = $langs->trans('EinvoicingCantDeleteADocumentLinkedToAnExistingSupplierInvoice', $object->id, $object->fk_element_id);
 				return -1;

@@ -527,7 +527,7 @@ class FacturXProtocol extends AbstractProtocol
 			// Generate the PDF including the XML using the TCPDF library.
 			// Bugged version that include the factur-x.xml file twice in the PDF. Only Acrobat Reader show there is 2 files, other PDF reader works correctly showing one file.
 			// But it works with Esalink and is the only solution when Dolibarr < 24.0 because such version have a class FPDF provided by default in Dolibarr
-			// that is in conflict with the class FPDF provided bu the module einvoicing and the library horstoeko/zugferd.
+			// that is in conflict with the class FPDF provided by the module einvoicing and the library horstoeko/zugferd.
 			$pdf = pdf_getInstance();
 			$pagecount = $pdf->setSourceFile($pathfacturxpdf);
 
@@ -918,7 +918,7 @@ class FacturXProtocol extends AbstractProtocol
 	 * @param  string 			$file                       		Source string file (PDF string). We use this file to get data of supplier invoice.
 	 * @param  string|null 		$ReadableViewFile        			Readable view file (PDP Generated readable PDF). We only store it if available.
 	 * @param  string 			$flowId                       		Flow identifier source of the invoice.
-	 * @return array{res:int, message:string, action:string|null}   Returns array with 'res' (1 on success, 0 already exists, -1 on failure) with a 'message' and an optional 'action'.
+	 * @return array{res:int<-1,1>, message:string, action?:string|null}   Returns array with 'res' (1 on success, 0 already exists, -1 on failure) with a 'message' and an optional 'action'.
 	 */
 	public function createSupplierInvoiceFromSource($file, $ReadableViewFile = null, $flowId = '')
 	{

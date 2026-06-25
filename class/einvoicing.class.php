@@ -624,7 +624,7 @@ class EInvoicing
 	 * @param int $onlyOut				Keep only status used for outgoing invoices
 	 * @param int $disableUnknownStatus	If 1, disable unknown status
 	 * @param int $addseparator			If 1, add decorators like a separator after status when einvoice life cycle has not started.
-	 * @return array<int, string>		Array of status
+	 * @return array<string|int,array{label:string,data-html:string,disable?:int,css?:string}>		Array of status
 	 */
 	public function getEinvoiceStatusOptions($includeCodesInLabel = 0, $onlyPdpStatuses = 0, $onlySendable = 0, $onlyCreate = 0, $onlyOut = 0, $disableUnknownStatus = 1, $addseparator = 0)
 	{
@@ -1203,9 +1203,9 @@ class EInvoicing
 		$resprints .= '<tr id="treinvoicing" class="treinvoicingseparator trtreinvoicingseparator_1">';
 		$resprints .= '<td><span class="far fa-' . (($expand_display ? 'minus' : 'plus') . '-square') . '"></span><strong> ' . $langs->trans("EInvoicing") . '</strong></td>';
 		if ($object->element == 'facture' || $object->element == 'invoice') {
-			$url = DOL_URL_ROOT . '/compta/facture/agenda.php?id=' . urlencode($object->id) . '&search_agenda_label=EINVOICING';
+			$url = DOL_URL_ROOT . '/compta/facture/agenda.php?id=' . ((int) $object->id) . '&search_agenda_label=EINVOICING';
 		} else {
-			$url = DOL_URL_ROOT . '/fourn/facture/agenda.php?id=' . urlencode($object->id) . '&search_agenda_label=EINVOICING';
+			$url = DOL_URL_ROOT . '/fourn/facture/agenda.php?id=' . ((int) $object->id) . '&search_agenda_label=EINVOICING';
 		}
 		$langs->load("suppliers");
 		$resprints .= '<td>';
@@ -1834,15 +1834,25 @@ class EInvoicing
 			$resprints .= '<tr class="treinvoicing_collapseseparator '.($expand_display ? '' : 'hidden').'">';
 			$resprints .= '<td>' . $form->textwithpicto($langs->trans("DefaultProductEBilling"), $langs->trans("DefaultProductEBillingHelp")) . '</td>';
 			$resprints .= '<td'.(empty($parameters['colspanvalue']) ? '' : ' colspan="'.(((int) $parameters['colspanvalue']) -1).'"').'>';
-
-			if ($product_id != '' && $product_id != '-1') {
-				if (preg_match('/^idprod/', $product_id)) {
-					$new_product_id = str_replace('idprod_', '', $product_id);
-					$tmpproduct = new Product($this->db);
-					$tmpproduct->fetch($new_product_id);
-					$resprints .= $tmpproduct->getNomUrl(1);
+			if ($mode == 'edit') {
+				if (version_compare(DOL_VERSION, '22.0.0', '<')) {
+					// Before v22, select_produits_fournisseurs() uses print instead of return
+					ob_start();
+					$form->select_produits_fournisseurs($object->id, $product_id, 'routing_product_id', '', '', array(), 0, 1);
+					$resprints .= ob_get_clean();
 				} else {
-					// TODO Show ref of product price
+					$resprints .= $form->select_produits_fournisseurs($object->id, $product_id, 'routing_product_id', '', '', array(), 0, 1, '', '', 1);
+				}
+			} else {
+				if ($product_id != '' && $product_id != '-1') {
+					if (preg_match('/^idprod/', $product_id)) {
+						$new_product_id = str_replace('idprod_', '', $product_id);
+						$tmpproduct = new Product($this->db);
+						$tmpproduct->fetch($new_product_id);
+						$resprints .= $tmpproduct->getNomUrl(1);
+					} else {
+						// TODO Show ref of product price
+					}
 				}
 			}
 			$resprints .= '</td>';
