@@ -596,8 +596,8 @@ class EInvoicing
 	/**
 	 * Get the path of the e-invoice file for a given invoice reference.
 	 *
-	 * @param 	string 	$invoiceRef 	The reference of the invoice.
-	 * @return 	string 					The full file path of the e-invoice file.
+	 * @param 	?string 	$invoiceRef 	The reference of the invoice.
+	 * @return 	string						The full file path of the e-invoice file.
 	 */
 	public function getEInvoiceFilePath($invoiceRef)
 	{
@@ -985,13 +985,15 @@ class EInvoicing
 		$warnings = [];
 
 		// Check company via the French National Business Registry API (data.gouv.fr)
-		// Search by company name, then cross-check the returned SIREN against idprof1
+		// Search by SIREN (unique and exact), then cross-check the returned name and address against
+		// the third party record. Searching by name would miss a company registered under an acronym
+		// or a trade name (a third party named after its brand rather than its legal name).
 		if (
 			!empty($thirdparty->country_code) && $thirdparty->country_code === 'FR'
 			&& !empty($thirdparty->name) && !empty($thirdparty->idprof1)
 		) {
 			$siren = substr(preg_replace('/\s+/', '', $thirdparty->idprof1), 0, 9);
-			$apiUrl = 'https://recherche-entreprises.api.gouv.fr/search?q=' . urlencode($thirdparty->name) . '&per_page=5';
+			$apiUrl = 'https://recherche-entreprises.api.gouv.fr/search?q=' . urlencode($siren) . '&per_page=5';
 
 			$response = getURLContent($apiUrl, 'GET', '', 1, ['Accept: application/json']);
 
@@ -1013,7 +1015,9 @@ class EInvoicing
 				}
 
 				if ($matchedCompany === null) {
-					// No result matched the name + SIREN combination
+					// The SIREN itself is unknown to the registry. The third party name is still passed as the
+					// second argument so the translations that have not yet dropped it (until the next Transifex
+					// sync of the reworded en_US source) keep rendering without an empty placeholder.
 					$warnings[] = $langs->trans("FxCheckWarnSIRENNotFound", $siren, $thirdparty->name);
 				} else {
 					// Check that the matched company is not closed
@@ -1321,6 +1325,39 @@ class EInvoicing
 			$resprints .= '<td>' . $form->textwithpicto($langs->trans("InvoicePrecheckResult"), $langs->trans("InvoicePrecheckResultHelp")) . '</td>';
 			$resprints .= '<td>' . $statusHtml . $popupHtml . '</td>';
 			$resprints .= '</tr>';
+		}
+
+		// Recipient reachability in the Approved Platforms directory (annuaire PA), checked before sending.
+		// This is a read-only lookup surfaced on the card so the user sees whether the recipient can receive
+		// an e-invoice, instead of discovering a routing rejection (fr:213) only after transmission.
+		if (($object->element == 'facture' || $object->element == 'invoice') && $action != 'create' && getDolGlobalInt('EINVOICING_PRECHECK_DIRECTORY', 1)) {
+			if (!is_object($object->thirdparty ?? null) && !empty($object->socid)) {
+				$object->fetch_thirdparty();
+			}
+			$directorySiren = is_object($object->thirdparty ?? null) ? preg_replace('/[^0-9]/', '', (string) $object->thirdparty->idprof1) : '';
+			if ($directorySiren !== '') {
+				$urlajaxdir = dol_buildpath('einvoicing/ajax/checkdirectory.php', 1);
+				// Auto-run once in the pre-send window (validated, not yet really transmitted to the AP).
+				$autorun = ((int) $object->status === Facture::STATUS_VALIDATED && empty($currentStatusInfo['everTransmitted'])) ? 1 : 0;
+				$resprints .= '<tr class="treinvoicing_collapseseparator">';
+				$resprints .= '<td>' . $form->textwithpicto($langs->trans("EInvoicingDirectoryCheck"), $langs->trans("EInvoicingDirectoryCheckHelp")) . '</td>';
+				$resprints .= '<td><span id="einvoice-directory" class="opacitymedium">' . ($autorun ? dol_escape_htmltag($langs->trans("EInvoicingDirectoryChecking")) : '-') . '</span>';
+				$resprints .= ' <a href="#" id="einvoice-directory-check" class="paddingleft">' . img_picto('', 'refresh', 'class="paddingright"') . $langs->trans("EInvoicingDirectoryCheckButton") . '</a>';
+				$resprints .= '</td></tr>';
+				$resprints .= '<script type="text/javascript">
+				(function(){
+					function einvoiceCheckDirectory(){
+						$("#einvoice-directory").html("' . dol_escape_js($langs->trans("EInvoicingDirectoryChecking")) . '").addClass("opacitymedium");
+						$.get("' . $urlajaxdir . '", { token: "' . currentToken() . '", ref: "' . dol_escape_js($object->ref) . '" }, function(data){
+							if (typeof data === "string") { try { data = JSON.parse(data); } catch(e){ console.error("checkdirectory: not JSON", data); return; } }
+							$("#einvoice-directory").html(data.html || "").removeClass("opacitymedium");
+						}, "text").fail(function(x){ console.error("checkdirectory ajax", x.status, x.statusText); });
+					}
+					$("#einvoice-directory-check").click(function(e){ e.preventDefault(); einvoiceCheckDirectory(); });
+					' . ($autorun ? 'setTimeout(einvoiceCheckDirectory, 1200);' : '') . '
+				})();
+				</script>';
+			}
 		}
 
 		// Invoice-level routing ID override (BT-49)
@@ -1958,10 +1995,10 @@ class EInvoicing
 	 * fetchLastknownInvoiceStatus
 	 *
 	 * @param int			$invoiceId		Invoice ID
-	 * @param string		$invoiceRef		Invoice ref
+	 * @param ?string		$invoiceRef		Invoice ref
 	 * @return array<string,int|string>
 	 */
-	public function fetchLastknownInvoiceStatus($invoiceId = 0, $invoiceRef = '')
+	public function fetchLastknownInvoiceStatus($invoiceId = 0, $invoiceRef = null)
 	{
 		global $conf;
 
@@ -1992,7 +2029,7 @@ class EInvoicing
 		if ($invoiceId > 0) {
 			$sql .= " AND element_id = " . ((int) $invoiceId);
 		} else {
-			$sql .= " AND syncref = '" . $this->db->escape($invoiceRef) . "'";	// Using id is more reliable.
+			$sql .= " AND syncref = '" . $this->db->escape((string) $invoiceRef) . "'";	// Using id is more reliable.
 		}
 
 		$foundforcurrentprovider = 0;
@@ -2103,16 +2140,69 @@ class EInvoicing
 	 * out (e.g. to test PA retry behaviour) by setting EINVOICING_ALLOW_RESEND_TRANSMITTED.
 	 *
 	 * @param 	int 	$invoiceId 	Invoice id
-	 * @param 	string 	$invoiceRef Invoice ref (fallback if id is 0)
+	 * @param 	?string $invoiceRef Invoice ref (fallback if id is 0)
 	 * @return 	bool 				True if the invoice must be treated as locked (already transmitted).
 	 */
-	public function isTransmittedLockActive($invoiceId = 0, $invoiceRef = '')
+	public function isTransmittedLockActive($invoiceId = 0, $invoiceRef = null)
 	{
 		if (getDolGlobalString('EINVOICING_ALLOW_RESEND_TRANSMITTED')) {
 			return false;
 		}
 		$status = $this->fetchLastknownInvoiceStatus($invoiceId, $invoiceRef);
 		return !empty($status['everTransmitted']);
+	}
+
+	/**
+	 * Gate generation/transmission on the recipient being reachable in the Approved Platforms directory.
+	 *
+	 * Only enforced when EINVOICING_REQUIRE_ROUTABLE_RECIPIENT is on (off by default, opt-in). A recipient
+	 * that is absent from the directory, or present without an active routing line, would be rejected by the
+	 * platform with a routing error (fr:213): blocking generation/sending avoids reaching that error state.
+	 *
+	 * Fails open (ok=1) whenever the check cannot be trusted, so it never blocks unexpectedly: option off,
+	 * provider without a directory lookup (status unsupported), directory call error, or a recipient with no
+	 * SIREN (handled by the standard required-information checks).
+	 *
+	 * @param 	Facture 	$object 	Invoice
+	 * @return 	array{ok:int,status:string,message:string}	ok=0 only when the recipient is confirmed not routable.
+	 */
+	public function checkRecipientRoutableForSend($object)
+	{
+		global $langs;
+
+		$res = array('ok' => 1, 'status' => '', 'message' => '');
+
+		if (!getDolGlobalInt('EINVOICING_REQUIRE_ROUTABLE_RECIPIENT')) {
+			return $res;	// opt-in, off by default
+		}
+
+		if (!is_object($object->thirdparty ?? null)) {
+			$object->fetch_thirdparty();
+		}
+		$siren = is_object($object->thirdparty ?? null) ? preg_replace('/[^0-9]/', '', (string) $object->thirdparty->idprof1) : '';
+		if ($siren === '') {
+			return $res;	// no SIREN: the standard required-information checks handle this
+		}
+
+		require_once __DIR__ . '/providers/PDPProviderManager.class.php';
+		$PDPManager = new PDPProviderManager($this->db);
+		$provider = $PDPManager->getProvider(getDolGlobalString('EINVOICING_PDP'));
+		if (!is_object($provider)) {
+			return $res;
+		}
+
+		$dir = $provider->checkRecipientDirectory($siren);
+		$res['status'] = isset($dir['status']) ? $dir['status'] : 'error';
+		if ($res['status'] === 'absent') {
+			$res['ok'] = 0;
+			$res['message'] = $langs->trans('EInvoicingDirectoryAbsent', $siren);
+		} elseif ($res['status'] === 'inactive') {
+			$res['ok'] = 0;
+			$res['message'] = $langs->trans('EInvoicingDirectoryInactive', $siren);
+		}
+		// routable / error / unsupported => ok stays 1 (fail-open)
+
+		return $res;
 	}
 
 	/**
