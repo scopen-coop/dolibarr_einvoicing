@@ -654,7 +654,7 @@ class CIIProtocol extends AbstractProtocol
 		$return_messages = array();
 
 		if (file_put_contents($tempFile, $file) === false) {
-			return ['res' => -1, 'message' => 'Failed to save CII file to temporary location'];
+			return ['res' => -1, 'message' => 'Failed to save EInvoice file to temporary location'];
 		}
 
 		if ($ReadableViewFile) {
@@ -740,6 +740,7 @@ class CIIProtocol extends AbstractProtocol
 		if ($supplierInvoice->type === '-1') {
 			return ['res' => -1, 'message' => 'Unfounded dolibarr corresponding Invoice code for document type code: ' . ($parsedHeader['documenttypecode'] ?? 'NA')];
 		}
+		// documentdate is already formatted into 'Y-m-d' by the parser ZugFerd and CII
 		$supplierInvoice->date = !empty($parsedHeader['documentdate']) ? dol_stringtotime($parsedHeader['documentdate']) : null;
 
 		// For credit notes, link to the source invoice via fk_facture_source (BT-25)
@@ -763,7 +764,7 @@ class CIIProtocol extends AbstractProtocol
 
 
 		// Set currency
-		$supplierInvoice->multicurrency_code = $parsedHeader['invoiceCurrency'];
+		$supplierInvoice->multicurrency_code = (string) $parsedHeader['invoiceCurrency'];
 
 		// Set import_key
 		$supplierInvoice->import_key = AbstractPDPProvider::$EINVOICING_LAST_IMPORT_KEY;
@@ -953,16 +954,22 @@ class CIIProtocol extends AbstractProtocol
 			}
 			// handle line-level discount if exists and update amounts
 			if (!empty($parsedLine['lineAllowances'])) {
-				$discount = $this->_resolveLineDiscountPercent($parsedLine['lineAllowances'], $parsedLine['lineTotalAmount']);
+				$discount = $this->resolveLineDiscountPercent($parsedLine['lineAllowances'], $parsedLine['lineTotalAmount']);
 				if ($discount !== false) {
-					$line->remise_percent  = $discount['percent'];
-					$line->subprice = round($discount['priceWithoutDiscount'] / $parsedLine['billedquantity'], 8);
+					$line->remise_percent = $discount['percent'];
+					if (!empty($parsedLine['billedquantity'])) {
+						$line->subprice = round($discount['priceWithoutDiscount'] / $parsedLine['billedquantity'], 8);
+					} else {
+						// Avoid a fatal DivisionByZeroError on a zero/empty billed quantity (e.g. a free
+						// sample line): keep the discount percent, let subprice fall back to netpriceamount below.
+						dol_syslog(get_class($this) . '::doCreateSupplierInvoiceFromSource line ' . ($parsedLine['lineid'] ?? '?') . ' has a discount but billedquantity is zero/empty, skipping subprice adjustment', LOG_WARNING);
+					}
 				}
 			}
-			$line->qty = $parsedLine['billedquantity'];
-			$line->subprice = $line->subprice ?? $parsedLine['netpriceamount'];
-			$line->tva_tx = $parsedLine['rateApplicablePercent'];
-			$line->total_ht = $parsedLine['lineTotalAmount'];
+			$line->qty = (float) $parsedLine['billedquantity'];
+			$line->subprice = $line->subprice ?? (float) $parsedLine['netpriceamount'];
+			$line->tva_tx = (float) $parsedLine['rateApplicablePercent'];
+			$line->total_ht = (float) $parsedLine['lineTotalAmount'];
 			$line->total_tva = $parsedLine['calculatedAmount'] ?? 0;
 			$line->total_ttc = $parsedLine['lineTotalAmount'] + ($parsedLine['calculatedAmount'] ?? 0);
 
@@ -972,7 +979,7 @@ class CIIProtocol extends AbstractProtocol
 		// Create document level discounts (allowances) as discounts in Dolibarr
 		$globalDiscountIds = array();
 		if (!empty($parsedHeader['headerAllowancesCharges'])) {
-			$headerDiscountIds = $this->_createHeaderDiscounts($parsedHeader['headerAllowancesCharges'], $socId, 	$parsedHeader['documentno']);
+			$headerDiscountIds = $this->createHeaderDiscounts($parsedHeader['headerAllowancesCharges'], $socId, (string) $parsedHeader['documentno']);
 			if (!empty($headerDiscountIds[-1])) {
 				return ['res' => -1, 'message' => $headerDiscountIds[-1]];
 			} else {
@@ -1039,6 +1046,14 @@ class CIIProtocol extends AbstractProtocol
 							$result = $discountcheck->fetch(0, 0, $linkedObject->id);
 							if ($result <= 0) {
 								// Loop on each vat rate
+								'
+								@phan-var-force array<string,float> $amount_ht
+								@phan-var-force array<string,float> $amount_tva
+								@phan-var-force array<string,float> $amount_ttc
+								@phan-var-force array<string,float> $multicurrency_amount_ht
+								@phan-var-force array<string,float> $multicurrency_amount_tva
+								@phan-var-force array<string,float> $multicurrency_amount_ttc
+								';
 								$amount_ht = $amount_tva = $amount_ttc = array();
 								$multicurrency_amount_ht = $multicurrency_amount_tva = $multicurrency_amount_ttc = array();
 								$i = 0;
@@ -1648,10 +1663,10 @@ class CIIProtocol extends AbstractProtocol
 		$profileGuidelines = [
 			'MINIMUM'  => 'urn:factur-x.eu:1p0:minimum', 	// Factur-X profile
 			'BASICWL'  => 'urn:factur-x.eu:1p0:basicwl', 	// Factur-X profile
-			'BASIC'    => 'urn:factur-x.eu:1p0:basic', 		// Factur-X profile
-			'EN16931'=> 'urn:cen.eu:en16931:2017', 		// CII Profile.
-			//'EN16931'  => 'urn:cen.eu:en16931:2017#conformant#urn.cpro.gouv.fr:1p0:extended-ctc-fr',	// CII Profile.
-			'EXTENDED' => 'urn:cen.eu:en16931:2017#conformant#urn:factur-x.eu:1p0:extended', 			// Factur-X profile
+			'BASIC'    => 'urn:factur-x.eu:1p0:basic', 		// Factur-X profile (flowProfile = BASIC)
+			'EN16931'=> 'urn:cen.eu:en16931:2017', 		// CII Profile (PDP flowProfile => CIUS)
+			'EXTENDED' => 'urn:cen.eu:en16931:2017#conformant#urn:factur-x.eu:1p0:extended', // Factur-X profile (flowProfile = Extended-CTC-FR)
+			'EXTENDEDFR' => 'urn:cen.eu:en16931:2017#conformant#urn.cpro.gouv.fr:1p0:extended-ctc-fr', 			// Factur-X and CII profile (Only France) (flowProfile = Extended-CTC-FR)
 		];
 
 		if (!isset($profileGuidelines[$profile])) {
@@ -1784,7 +1799,7 @@ class CIIProtocol extends AbstractProtocol
 		} else {
 			$shiptotrade = $doc->createElement('ram:ShipToTradeParty');
 			$delivery->appendChild($shiptotrade);
-			$this->buildParty($doc, $shiptotrade, $invoiceData, 'buyer', false);
+			$this->buildParty($doc, $shiptotrade, $invoiceData, 'buyer', false, true);
 		}
 
 
@@ -2080,10 +2095,11 @@ class CIIProtocol extends AbstractProtocol
 	 * @param array       		$data      		Invoice data array
 	 * @param string      		$type      		'seller' or 'buyer'
 	 * @param bool        		$wrap			Whether to wrap in SellerTradeParty/BuyerTradeParty (true for main parties, false for ship to party)
+	 * @param bool        		$minimal		Whether to emit only mandatory fields (used for building the ShipToTradeParty)
 	 *
 	 * @return void
 	 */
-	private function buildParty($doc, $agreement, $data, $type, $wrap = true)
+	private function buildParty($doc, $agreement, $data, $type, $wrap = true, $minimal = false)
 	{
 		if ($wrap) {
 			$tag = $type === 'seller' ? 'ram:SellerTradeParty' : 'ram:BuyerTradeParty';
@@ -2094,28 +2110,31 @@ class CIIProtocol extends AbstractProtocol
 		}
 
 		$prefix = $type;
-		$node->appendChild($doc->createElement('ram:ID', $data[$prefix . 'ids']));
 
-		// GlobalID
+		// ID / GlobalID — only one of the two may be present. If GlobalID is present, omit the ID to avoid XSD validation errors
 		if (!empty($data[$prefix . 'GlobalIds'])) {
 			foreach ($data[$prefix . 'GlobalIds'] as $globalId) {
 				$g = $doc->createElement('ram:GlobalID', $globalId['value']);
 				$g->setAttribute('schemeID', $globalId['schemeID']);
 				$node->appendChild($g);
 			}
+		} else {
+			$node->appendChild($doc->createElement('ram:ID', $data[$prefix . 'ids']));
 		}
 
 		$node->appendChild($doc->createElement('ram:Name', htmlspecialchars($data[$prefix . 'name'])));
 
 		// Legal org
-		$legal = $doc->createElement('ram:SpecifiedLegalOrganization');
-		$node->appendChild($legal);
-		$id = $doc->createElement('ram:ID', $data[$prefix . 'LegalOrgId']);
-		$id->setAttribute('schemeID', $data[$prefix . 'LegalOrgScheme']);
-		$legal->appendChild($id);
-		$legal->appendChild(
-			$doc->createElement('ram:TradingBusinessName', $data[$prefix . 'TradingName'])
-		);
+		if (!$minimal) {
+			$legal = $doc->createElement('ram:SpecifiedLegalOrganization');
+			$node->appendChild($legal);
+			$id = $doc->createElement('ram:ID', $data[$prefix . 'LegalOrgId']);
+			$id->setAttribute('schemeID', $data[$prefix . 'LegalOrgScheme']);
+			$legal->appendChild($id);
+			$legal->appendChild(
+				$doc->createElement('ram:TradingBusinessName', $data[$prefix . 'TradingName'])
+			);
+		}
 
 		// Contact
 		// ram:DefinedTradeContact is the wrapper for all contact sub-fields. Only create it when at
@@ -2169,7 +2188,7 @@ class CIIProtocol extends AbstractProtocol
 		$addr->appendChild($doc->createElement('ram:CountryID', $data[$prefix . 'country']));
 
 		// URIUniversalCommunication
-		if (!empty($data[$prefix . 'CommunicationUriScheme']) && !empty($data[$prefix . 'CommunicationUri'])) {
+		if (!$minimal && !empty($data[$prefix . 'CommunicationUriScheme']) && !empty($data[$prefix . 'CommunicationUri'])) {
 			$uri = $doc->createElement('ram:URIUniversalCommunication');
 			$node->appendChild($uri);
 			$uriid = $doc->createElement('ram:URIID', $data[$prefix . 'CommunicationUri']);			// Example 315143296_1939
@@ -2178,7 +2197,7 @@ class CIIProtocol extends AbstractProtocol
 		}
 
 		// VAT
-		if (!empty($data[$prefix . 'vatnumber'])) {
+		if (!$minimal && !empty($data[$prefix . 'vatnumber'])) {
 			$tax = $doc->createElement('ram:SpecifiedTaxRegistration');
 			$id = $doc->createElement('ram:ID', $data[$prefix . 'vatnumber']);
 			$id->setAttribute('schemeID', 'VA');
@@ -2617,7 +2636,7 @@ class CIIProtocol extends AbstractProtocol
 	 * @param float|null $lineTotalAmount BT-131 net line amount (base ht)
 	 * @return false|array{percent: float, base: float, discountAmount: float, priceWithoutDiscount: float}
 	 */
-	private function _resolveLineDiscountPercent(array $lineAllowances, ?float $lineTotalAmount)
+	protected function resolveLineDiscountPercent(array $lineAllowances, ?float $lineTotalAmount)
 	{
 		// Keep only allowances (indicator = "false"), ignore charges (indicator = "true")
 		$allowances = array();
@@ -2668,7 +2687,7 @@ class CIIProtocol extends AbstractProtocol
 	 * @param string $description             	invoice number or any reference
 	 * @return array{-1:string}|array<int,int>	[ originalIndex => fk_remise_except_id ] or '-1' on error
 	 */
-	private function _createHeaderDiscounts(array $headerAllowancesCharges, int $fk_soc, string $description): array
+	protected function createHeaderDiscounts(array $headerAllowancesCharges, int $fk_soc, string $description): array
 	{
 		global $db, $user;
 

@@ -95,7 +95,6 @@ dol_include_once('/einvoicing/class/document.class.php');
 
 $mode = GETPOST('mode', 'aZ09');
 $objectId = GETPOSTINT('objectId');
-$field = GETPOST('field', 'aZ09');
 $value = GETPOST('value', 'aZ09');
 
 // @phan-suppress-next-line PhanUndeclaredClass
@@ -114,8 +113,10 @@ dol_syslog("Call ajax einvoicing/ajax/document.php");
 
 top_httphead();
 
+$field = 'fieldtoedit';		// TODO
+
 // Update the object field with the new value
-if ($objectId && $field && isset($value)) {
+if ($objectId && isset($value)) {
 	$object->fetch($objectId);
 	if ($object->id > 0) {
 		$object->$field = $value;
