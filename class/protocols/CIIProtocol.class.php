@@ -61,6 +61,29 @@ class CIIProtocol extends AbstractProtocol
 	protected const BUILD_XML_PROFILE = 'EN16931';
 
 	/**
+	 * Maximum number of decimals allowed for the unit prices: Item net price (BT-146),
+	 * Item price discount (BT-147) and Item gross price (BT-148).
+	 *
+	 * EN 16931 sets no limit on these (BT-146 only carries BR-26 and BR-27), but the French
+	 * CTC layer does: rule BR-FR-DEC-03 of the FNFE-MPE CTC-FR Schematron rejects, with a
+	 * "fatal" flag, any value matching more than 6 decimals ('^[-]?\d{1,19}(\.\d{1,6})?$').
+	 * Note this is NOT the 2 decimals limit of the amounts (BR-DEC-* / BR-FR-DEC-01): a unit
+	 * price is not an amount, and no rule checks that the line net amount (BT-131) derives
+	 * arithmetically from the unit price.
+	 *
+	 * @const int
+	 */
+	protected const MAX_DECIMALS_UNIT_PRICE = 6;
+
+	/**
+	 * Maximum number of decimals allowed for the quantities: Invoiced quantity (BT-129) and
+	 * Item price base quantity (BT-149), per rule BR-FR-DEC-02 of the CTC-FR Schematron ("fatal").
+	 *
+	 * @const int
+	 */
+	protected const MAX_DECIMALS_QUANTITY = 4;
+
+	/**
 	 * @var array<string,string>
 	 */
 	protected $invoiceTemplate;
@@ -68,6 +91,23 @@ class CIIProtocol extends AbstractProtocol
 	 * @var array<string,null|false|int|string|array>
 	 */
 	protected $lineTemplate;
+	/**
+	 * Return the number of decimals to use for a unit price (BT-146, BT-147, BT-148).
+	 *
+	 * Follows the Dolibarr unit price accuracy, so a price is transmitted as accurately as it is
+	 * stored, but never above what the norm accepts (see self::MAX_DECIMALS_UNIT_PRICE): an
+	 * instance configured with a higher accuracy would otherwise produce invoices rejected by the
+	 * Access Point. Never goes below 2, which is the accuracy of an amount.
+	 *
+	 * @return	int							Number of decimals
+	 */
+	protected static function getUnitPriceDecimals()
+	{
+		$decimals = getDolGlobalInt('MAIN_MAX_DECIMALS_UNIT', 5);
+
+		return max(2, min($decimals, self::MAX_DECIMALS_UNIT_PRICE));
+	}
+
 	/**
 	 * Initialize available protocols.
 	 *
@@ -832,65 +872,11 @@ class CIIProtocol extends AbstractProtocol
 						if ($linkedObject->type == FactureFournisseur::TYPE_DEPOSIT) {
 							$is_deposit_line = 1;
 
-							// Check if deposit line is already converted to a reduction otherwise we convert it
-							//require_once DOL_DOCUMENT_ROOT.'/core/class/discount.class.php';
-							$discountcheck = new DiscountAbsolute($db);
-							$result = $discountcheck->fetch(0, 0, $linkedObject->id);
-							if ($result <= 0) {
-								// Loop on each vat rate
-								$amount_ht = $amount_tva = $amount_ttc = array();
-								$multicurrency_amount_ht = $multicurrency_amount_tva = $multicurrency_amount_ttc = array();
-								$i = 0;
-								foreach ($linkedObject->lines as $line) {
-									if ($line->product_type < 9 && $line->total_ht != 0) { // Remove lines with product_type greater than or equal to 9 and no need to create discount if amount is null
-										$keyforvatrate = $line->tva_tx . ($line->vat_src_code ? ' (' . $line->vat_src_code . ')' : '');
-
-										$amount_ht[$keyforvatrate] += $line->total_ht;
-										$amount_tva[$keyforvatrate] += $line->total_tva;
-										$amount_ttc[$keyforvatrate] += $line->total_ttc;
-										$multicurrency_amount_ht[$keyforvatrate] += $line->multicurrency_total_ht;
-										$multicurrency_amount_tva[$keyforvatrate] += $line->multicurrency_total_tva;
-										$multicurrency_amount_ttc[$keyforvatrate] += $line->multicurrency_total_ttc;
-										$i++;
-									}
-								}
-
-								$discount = new DiscountAbsolute($db);
-								$discount->description = '(DEPOSIT)';
-								$discount->discount_type = 1; // Supplier discount
-								$discount->fk_soc = $linkedObject->socid;
-								$discount->socid = $linkedObject->socid;
-								$discount->fk_invoice_supplier_source = $linkedObject->id;
-								foreach ($amount_ht as $tva_tx => $xxx) {  // @phan-suppress-current-line PhanEmptyForeach
-									$discount->amount_ht = abs((float) $amount_ht[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
-									$discount->amount_tva = abs((float) $amount_tva[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
-									$discount->amount_ttc = abs((float) $amount_ttc[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
-									$discount->multicurrency_amount_ht = abs((float) $multicurrency_amount_ht[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
-									$discount->multicurrency_amount_tva = abs((float) $multicurrency_amount_tva[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
-									$discount->multicurrency_amount_ttc = abs((float) $multicurrency_amount_ttc[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
-
-									// Clean vat code
-									$reg = array();
-									$vat_src_code = '';
-									if (preg_match('/\((.*)\)/', $tva_tx, $reg)) {
-										$vat_src_code = $reg[1];
-										$tva_tx = preg_replace('/\s*\(.*\)/', '', $tva_tx); // Remove code into vatrate.
-									}
-
-									$discount->tva_tx = abs((float) $tva_tx);
-									$discount->vat_src_code = $vat_src_code;
-
-									$result = $discount->create($user);
-									if ($result < 0) {
-										return ['res' => -1, 'message' => 'Failed to create discount for deposit line: ' . $discount->error];
-									}
-									$fk_remise = $result;
-								}
-							} else {
-								// Deposit already converted so reuse existing discount
-								$is_deposit_line = 1;
-								$fk_remise = $discountcheck->id;
+							$depositDiscountRes = $this->getOrCreateDepositDiscount($linkedObject);
+							if ($depositDiscountRes['res'] < 0) {
+								return $depositDiscountRes;
 							}
+							$fk_remise = $depositDiscountRes['fkRemise'];
 						}
 
 						/*
@@ -1023,7 +1009,7 @@ class CIIProtocol extends AbstractProtocol
 					$dateDoc = $doc['FormattedIssueDateTime'] ?? null;
 					$typeDoc = $doc['TypeCode'] ?? null;
 
-					$sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "facture_fourn WHERE ref_supplier = '" . $db->escape($lineRefDocId) . "' LIMIT 1";
+					$sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "facture_fourn WHERE ref_supplier = '" . $db->escape($refDoc) . "' LIMIT 1";
 					$resql = $db->query($sql);
 					if ($db->num_rows($resql) != 1) {
 						return ['res' => -1, 'message' => 'Document : ' . $refDoc . ' linked to document ' . $parsedHeader['documentno'] . ' not found in Dolibarr'];
@@ -1040,73 +1026,11 @@ class CIIProtocol extends AbstractProtocol
 						if ($linkedObject->type == FactureFournisseur::TYPE_DEPOSIT) {
 							$create_deposit_line = 1;
 
-							// Check if deposit line is already converted to a reduction otherwise we convert it
-							//require_once DOL_DOCUMENT_ROOT.'/core/class/discount.class.php';
-							$discountcheck = new DiscountAbsolute($db);
-							$result = $discountcheck->fetch(0, 0, $linkedObject->id);
-							if ($result <= 0) {
-								// Loop on each vat rate
-								'
-								@phan-var-force array<string,float> $amount_ht
-								@phan-var-force array<string,float> $amount_tva
-								@phan-var-force array<string,float> $amount_ttc
-								@phan-var-force array<string,float> $multicurrency_amount_ht
-								@phan-var-force array<string,float> $multicurrency_amount_tva
-								@phan-var-force array<string,float> $multicurrency_amount_ttc
-								';
-								$amount_ht = $amount_tva = $amount_ttc = array();
-								$multicurrency_amount_ht = $multicurrency_amount_tva = $multicurrency_amount_ttc = array();
-								$i = 0;
-								foreach ($linkedObject->lines as $line) {
-									if ($line->product_type < 9 && $line->total_ht != 0) { // Remove lines with product_type greater than or equal to 9 and no need to create discount if amount is null
-										$keyforvatrate = $line->tva_tx . ($line->vat_src_code ? ' (' . $line->vat_src_code . ')' : '');
-
-										$amount_ht[$keyforvatrate] += $line->total_ht;
-										$amount_tva[$keyforvatrate] += $line->total_tva;
-										$amount_ttc[$keyforvatrate] += $line->total_ttc;
-										$multicurrency_amount_ht[$keyforvatrate] += $line->multicurrency_total_ht;
-										$multicurrency_amount_tva[$keyforvatrate] += $line->multicurrency_total_tva;
-										$multicurrency_amount_ttc[$keyforvatrate] += $line->multicurrency_total_ttc;
-										$i++;
-									}
-								}
-
-								$discount = new DiscountAbsolute($db);
-								$discount->description = '(DEPOSIT)';
-								$discount->discount_type = 1; // Supplier discount
-								$discount->fk_soc = $linkedObject->socid;
-								$discount->socid = $linkedObject->socid;
-								$discount->fk_invoice_supplier_source = $linkedObject->id;
-								foreach ($amount_ht as $tva_tx => $xxx) {  // @phan-suppress-current-line PhanEmptyForeach
-									$discount->amount_ht = abs((float) $amount_ht[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
-									$discount->amount_tva = abs((float) $amount_tva[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
-									$discount->amount_ttc = abs((float) $amount_ttc[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
-									$discount->multicurrency_amount_ht = abs((float) $multicurrency_amount_ht[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
-									$discount->multicurrency_amount_tva = abs((float) $multicurrency_amount_tva[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
-									$discount->multicurrency_amount_ttc = abs((float) $multicurrency_amount_ttc[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
-
-									// Clean vat code
-									$reg = array();
-									$vat_src_code = '';
-									if (preg_match('/\((.*)\)/', $tva_tx, $reg)) {
-										$vat_src_code = $reg[1];
-										$tva_tx = preg_replace('/\s*\(.*\)/', '', $tva_tx); // Remove code into vatrate.
-									}
-
-									$discount->tva_tx = abs((float) $tva_tx);
-									$discount->vat_src_code = $vat_src_code;
-
-									$result = $discount->create($user);
-									if ($result < 0) {
-										return ['res' => -1, 'message' => 'Failed to create discount for deposit line: ' . $discount->error];
-									}
-									$fk_remise_for_deposit = $result;
-								}
-							} else {
-								// Deposit already converted so reuse existing discount
-								$create_deposit_line = 1;
-								$fk_remise_for_deposit = $discountcheck->id;
+							$depositDiscountRes = $this->getOrCreateDepositDiscount($linkedObject);
+							if ($depositDiscountRes['res'] < 0) {
+								return $depositDiscountRes;
 							}
+							$fk_remise_for_deposit = $depositDiscountRes['fkRemise'];
 
 							// After creating the discount for the deposit, we create a line in the invoice to link it to the deposit
 							if ($create_deposit_line && !empty($fk_remise_for_deposit)) {
@@ -2009,21 +1933,21 @@ class CIIProtocol extends AbstractProtocol
 		if (isset($line['grosspriceamount'])) {
 			$gross = $doc->createElement('ram:GrossPriceProductTradePrice');
 			$price->appendChild($gross);
-			$gross->appendChild($doc->createElement('ram:ChargeAmount', number_format($line['grosspriceamount'], 2, '.', '')));
+			$gross->appendChild($doc->createElement('ram:ChargeAmount', number_format($line['grosspriceamount'], self::getUnitPriceDecimals(), '.', '')));
 		}
 
 		// Mandatory by Factur-X, EN 16931
 		// This is the unit price excluding tax. If it does not contains the discount, the discount must be declared into AllowanceCharge.
 		$net = $doc->createElement('ram:NetPriceProductTradePrice');
 		$price->appendChild($net);
-		$net->appendChild($doc->createElement('ram:ChargeAmount', number_format($line['netpriceamount'], 2, '.', '')));
+		$net->appendChild($doc->createElement('ram:ChargeAmount', number_format($line['netpriceamount'], self::getUnitPriceDecimals(), '.', '')));
 
 
 		// Quantity
 		$deliv = $doc->createElement('ram:SpecifiedLineTradeDelivery');
 		$el->appendChild($deliv);
 
-		$qty = $doc->createElement('ram:BilledQuantity', number_format($line['billedquantity'], 2, '.', ''));
+		$qty = $doc->createElement('ram:BilledQuantity', number_format($line['billedquantity'], self::MAX_DECIMALS_QUANTITY, '.', ''));
 		$qty->setAttribute('unitCode', $line['billedquantityunitcode']);
 		$deliv->appendChild($qty);
 
@@ -2728,6 +2652,89 @@ class CIIProtocol extends AbstractProtocol
 		}
 
 		return $result;
+	}
+
+	/**
+	 * Get an existing Dolibarr discount exception linked to a deposit (acompte) supplier invoice,
+	 * or create it by grouping the deposit invoice's lines by VAT rate.
+	 *
+	 * Shared by both the line-level and document-level deposit handling blocks of
+	 * doCreateSupplierInvoiceFromSource(), in both CIIProtocol and FacturXProtocol (which inherits
+	 * this method): the exact same logic was duplicated 4 times before being extracted here.
+	 *
+	 * @param FactureFournisseur $linkedObject The deposit (TYPE_DEPOSIT) supplier invoice referenced by the final invoice
+	 * @return array{res:int<-1,1>, message?:string, fkRemise?:int} 'res' 1 on success with 'fkRemise', -1 on error with 'message'
+	 */
+	protected function getOrCreateDepositDiscount(FactureFournisseur $linkedObject)
+	{
+		global $db, $user;
+
+		// Check if deposit line is already converted to a reduction otherwise we convert it
+		$discountcheck = new DiscountAbsolute($db);
+		$result = $discountcheck->fetch(0, 0, $linkedObject->id);
+		if ($result > 0) {
+			// Deposit already converted so reuse existing discount
+			return ['res' => 1, 'fkRemise' => $discountcheck->id];
+		}
+
+		// Loop on each vat rate
+		'
+		@phan-var-force array<string,float> $amount_ht
+		@phan-var-force array<string,float> $amount_tva
+		@phan-var-force array<string,float> $amount_ttc
+		@phan-var-force array<string,float> $multicurrency_amount_ht
+		@phan-var-force array<string,float> $multicurrency_amount_tva
+		@phan-var-force array<string,float> $multicurrency_amount_ttc
+		';
+		$amount_ht = $amount_tva = $amount_ttc = array();
+		$multicurrency_amount_ht = $multicurrency_amount_tva = $multicurrency_amount_ttc = array();
+		foreach ($linkedObject->lines as $line) {
+			if ($line->product_type < 9 && $line->total_ht != 0) { // Remove lines with product_type greater than or equal to 9 and no need to create discount if amount is null
+				$keyforvatrate = $line->tva_tx . ($line->vat_src_code ? ' (' . $line->vat_src_code . ')' : '');
+
+				$amount_ht[$keyforvatrate] += $line->total_ht;
+				$amount_tva[$keyforvatrate] += $line->total_tva;
+				$amount_ttc[$keyforvatrate] += $line->total_ttc;
+				$multicurrency_amount_ht[$keyforvatrate] += $line->multicurrency_total_ht;
+				$multicurrency_amount_tva[$keyforvatrate] += $line->multicurrency_total_tva;
+				$multicurrency_amount_ttc[$keyforvatrate] += $line->multicurrency_total_ttc;
+			}
+		}
+
+		$fkRemise = 0;
+		$discount = new DiscountAbsolute($db);
+		$discount->description = '(DEPOSIT)';
+		$discount->discount_type = 1; // Supplier discount
+		$discount->fk_soc = $linkedObject->socid;
+		$discount->socid = $linkedObject->socid;
+		$discount->fk_invoice_supplier_source = $linkedObject->id;
+		foreach ($amount_ht as $tva_tx => $xxx) {  // @phan-suppress-current-line PhanEmptyForeach
+			$discount->amount_ht = abs((float) $amount_ht[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
+			$discount->amount_tva = abs((float) $amount_tva[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
+			$discount->amount_ttc = abs((float) $amount_ttc[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
+			$discount->multicurrency_amount_ht = abs((float) $multicurrency_amount_ht[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
+			$discount->multicurrency_amount_tva = abs((float) $multicurrency_amount_tva[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
+			$discount->multicurrency_amount_ttc = abs((float) $multicurrency_amount_ttc[$tva_tx]);  // @phan-suppress-current-line PhanTypeInvalidDimOffset
+
+			// Clean vat code
+			$reg = array();
+			$vat_src_code = '';
+			if (preg_match('/\((.*)\)/', $tva_tx, $reg)) {
+				$vat_src_code = $reg[1];
+				$tva_tx = preg_replace('/\s*\(.*\)/', '', $tva_tx); // Remove code into vatrate.
+			}
+
+			$discount->tva_tx = abs((float) $tva_tx);
+			$discount->vat_src_code = $vat_src_code;
+
+			$result = $discount->create($user);
+			if ($result < 0) {
+				return ['res' => -1, 'message' => 'Failed to create discount for deposit line: ' . $discount->error];
+			}
+			$fkRemise = $result;
+		}
+
+		return ['res' => 1, 'fkRemise' => $fkRemise];
 	}
 
 	/**
