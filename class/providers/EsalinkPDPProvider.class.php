@@ -1751,4 +1751,44 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 
 		return ['res' => $res, 'message' => $message];
 	}
+
+	public function tryAPI(){
+
+		$response = $this->callApi("customerPA/32857", "GET", false, [], '');		// This include the refresh of token
+
+		//$response = $this->callApi("customerPA/search", "POST", false, [], '');		// This include the refresh of token
+//
+//		var_dump($response['response']['customers']);
+
+	//	$response = $this->callApi("customerPA/1434", "GET", false, [], '');		// This include the refresh of token
+
+		unset($response['response']['electronicAddresses']);
+		unset($response['response']['customerId']);
+		unset($response['response']['activationStatus']);
+		unset($response['response']['stateReason']);
+		unset($response['response']['customerLegalId']);
+		unset($response['response']['customerVat']);
+		unset($response['response']['activationPa']);
+		unset($response['response']['receptionPa']);
+		unset($response['response']['startDate']);
+
+		var_dump($response['response']);
+
+		$path = DOL_DATA_ROOT.'/logo_irisolaris.jpg';
+		$type = pathinfo($path, PATHINFO_EXTENSION);
+		$data = file_get_contents($path);
+		$base64 = 'data:image/' . $type . ';base64,' . base64_encode($data);
+
+
+		$response['response']['logo']=$base64;
+		$response['response']['customerEmail']='';
+		$request=$response['response'];
+
+		var_dump($request);
+		var_dump(json_encode($request));
+
+		$response = $this->callApi("customerPA/1434", "PUTALREADYFORMATED", json_encode($request), [], '');		// This include the refresh of token
+
+		var_dump($response);
+	}
 }

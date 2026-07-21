@@ -569,6 +569,8 @@ llxHeader('', $title, $help_url, '', 0, 0, $morejs, $morecss, '', 'mod-einvoicin
 // });
 // </script>';
 
+$provider->tryAPI();
+
 $arrayofselected = is_array($toselect) ? $toselect : array();
 
 $param = '';
