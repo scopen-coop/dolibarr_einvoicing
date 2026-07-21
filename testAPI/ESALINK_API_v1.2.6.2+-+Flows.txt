@@ -1,0 +1,857 @@
+openapi: 3.0.1
+info:
+  title: HUBTIMIZE PA (Flows) OpenAPI definition
+  version: v1.2.6.2
+  description: >
+
+    _Par Esalink (Plateforme Agréée)_
+    
+
+    HUBTIMIZE APIs are based on `AFNOR XP Z12-013 version 1.2.0 (02/2026)` definition of standard API
+
+
+    Each endpoint must be called with an access token (Bearer). This token is
+    retrieved by a call to a token URL.
+
+    
+    In order to avoid any firewall block, please add to you requests header the following value :
+    
+     > For __TEST__ environment
+     >>- Key = `hubtimize-api-key`
+     >>- Value = `a3e49892-260f-4a3f-b497-3c9b68ee85d1`
+     
+     > For __PROD__ environment
+     >>- Key = `hubtimize-api-key`
+     >>- Value = _to be requested before go live_
+    
+
+    ---
+    
+    ## Changelog
+    
+    >- `v1.2.6` July 2026 
+     >>- __Change__ POST `/v1/oauth2/token` => __Breaking change__ in order to be compliant with oauth2 and RFC 6749 
+     >>>- Actual way of working is __disabled__ (user query Parameters)
+     >>>- Two ways of using this endpoint
+     >>>>- Using `application/x-www-form-urlencoded` with values __client_id__, __client_secret__ and __grant_type=client_credentials__
+     >>>>- HTTP Basic : using header `Authorization : Basic` with encoded credentials __Authorization : Basic base64(urlencode(client_id):urlencode(client_secret))__ and using `application/x-www-form-urlencoded` with value __grant_type=client_credentials__
+     >- `v1.2.5` March 2026 (05/03/2026)
+     >>- __Add__ `/v1/oauth2/token` => standard oauth2 token Api
+    >- `v1.2.4` March 2026 (05/03/2026)
+     >>- management of `processingRule` 
+     >>>- _`not set`_ (default) : dynamic identification, manage eInvoicing (B2B), status CDAR and consolidated eReporting (NotApplicable) 
+     >>>- `B2B` : for regulated B2B invoices
+     >>>- `B2BInt` : for eReporting only - _Later 2026_
+     >>>- `B2C` : for eReporting only - _Later 2026_
+     >>>- `B2G` : e-invoicing for B2G sales - _Later 2026_
+     >>>- `B2GInt` : _waiting additional informations_
+     >>>- `OutOfScope` : _Later 2026_
+     >>>- `B2GOutOfScope` : _waiting additional informations_
+     >>>- `ArchiveOnly` : For import and archive only - _Later 2026_
+     >>>- `NotApplicable` : for status CDAR and consolidated eReporting
+     >>- for CDAR (LC) the `trackingId` will be now set to the Invoice flowId (to allow you get only statuses related to a specific flowId)
+     
+     >- `v1.2.3` November 2025 (27/11/2025)
+     >>- return of `POST /v1/flows` updated to match last release of AFNOR specification
+     >>- add of parameter `processingRule` on `flows` definition (B2B, B2BInt, B2C, OutOfScope, ArchiveOnly, NotApplicable) - _usage not implemented yet_
+     >>>- add of parameter `processingRuleSource` on `flows` definition (Input, Computed) - _usage not implemented_ yet
+     >>- update `flowSyntax` list (CII, UBL, Factur-X, CDAR, FRR) to match AFNOR specification
+     >>- update `acknowledgement` structure on `flows` to match AFNOR specification (detail level)
+     >>- Add controls
+     >>>- Hash calculation and check (ChecksumMismatch)
+     >>>- Empty file attachment (EmptyFlow)
+     >>>- Flow must be less than 100Mo (FileSizeExceeded)
+     >>>- Factur-X only accept .pdf and other flows .xml extensions (FlowTypeError)
+     
+     
+     >- `v1.2.0` November 2025 (07/11/2025)
+     >>>- support of __Belgium__ e-invoicing (_require a specific setup, please contact us if needed_)
+     >>>- remove `offset` from Flow search
+     >>>- Change `flowSyntax` on Flow schema
+     >>>>- CII
+     >>>>- UBL
+     >>>>- FACTUR-X _(previously FACTUR_X)_
+     >>>>- CDAR
+     >>>>- FRR
+     >>>- Change `flowProfile` on Flow schema
+     >>>>- Basic
+     >>>>- CIUS _(previously Cius)_
+     >>>>- Extended-CTC-FR
+     >>>- Change `flowType` on Flow schema
+     >>>>- CustomerInvoice
+     >>>>- SupplierInvoice
+     >>>>- StateInvoice - Message sent by the Plateforme Agréée to the French administration (Contact us if you want to receive these files on the API)
+     >>>>- CustomerInvoiceLC
+     >>>>- SupplierInvoiceLC
+     >>>>- StateCustomerInvoiceLC - Contact us if you need this Status file exchanged between the PA and the French administration
+     >>>>- StateSupplierInvoiceLC - Contact us if you need this Status file exchanged between the PA and the French administration
+     >>>>- AggregatedCustomerTransactionReport 
+     >>>>- UnitaryCustomerTransactionReport - _Not supported yet (plan for 2026)_
+     >>>>- AggregatedCustomerPaymentReport 
+     >>>>- UnitaryCustomerPaymentReport - _Not supported yet (plan for 2026)_
+     >>>>- UnitarySupplierTransactionReport - _Not supported yet (plan for 2026)_
+     >>>>- MultiFlowReport - _Not supported yet (plan for 2026)_
+     >>>- change `reasonCode` list on Flow acknowledgement 
+     >>>>- AttachmentSizeExceeded
+     >>>>- EmptyAttachment
+     >>>>- AttachmentTypeError
+     >>>>- EmptyFlow
+     >>>>- OtherTechnicalError
+     >>>>- InvalidSchema
+     >>>>- FileSizeExceeded
+     >>>>- FlowTypeError
+     >>>>- AlreadyExistingFlow
+     >>>>- VirusFound
+     >>>>- InvoiceLCInvalidStatus
+     >>>>- InvoiceLCStatusError
+     >>>>- InvoiceLCRuleError
+     >>>>- InvoiceLCAccessDenied
+     >>>>- InvoiceLCAmountError
+
+     >- `v1.1.1` August 2025
+     >>- Adding "hubtimize-api-key" to the headers
+     
+     >- `v1.1.0` July 2025
+     >>- Change of url
+     
+     >- `v1.0.0` June 2025
+     >>- Flows Api
+     
+    ---
+
+    ## FLOWS Api
+
+
+    The __Flow Service__ API allows to:
+
+     >- upload a flow.
+     >- retrieve information related to a set of flows.
+     >- download a flow given its identifier
+
+
+    The resources of the API are :
+
+     >- `/flows` : with creation and retrieval methods.
+
+    Worflow example:
+
+     >- `POST /v1/flows` : provide the flow information & content
+     >- `POST /v1/flows/search` : retrieve flows given multiple criterias.
+     >- `GET /v1/flows/{id}` : download a flow based on its id.
+
+
+     
+     __Flows api are not functional APIs__, they're technical. A `GET` on a flow does not gives you the functional status of an invoice (`ok` at this point only says that the file you sent to the platform "can be read"). To know the functional status of your invoice sent, you __MUST__ get all the LifeCycle XML files available to you on the API, get them and read them.
+
+
+     ---
+     
+     # API technical documentation
+servers:
+  - url: https://ppd.hubtimize.fr/api/orchestrator/
+    description: Test environment
+  - url: https://hubtimize.fr/api/orchestrator/
+    description: Production environment (not ready)
+paths:
+  /v1/token:
+    post:
+      tags:
+        - API Token
+      operationId: token
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRequestDto'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/AccessTokenResponse'
+  /v1/oauth2/token:
+    post:
+      tags:
+        - API Token
+      operationId: oauthToken
+      security:
+        - basicAuth: []   # Mode 1 : credentials dans l'en-tête
+        - {}              # Mode 2 : credentials dans le body
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/OAuthTokenRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessTokenResponse"
+  /v1/flows:
+    post:
+      tags:
+        - API Flows
+      summary: Submit a new flow
+      description: |
+        Submit a flow. A flow is a single-invoice file, with :
+          - an XML/PDF file with the data of the invoice
+
+        The flow is created with a `flowInfo` object, allowing to qualify the flow.
+
+        A flow can be :
+          - an invoice (CII, UBL, Factur-X,...)
+          - a lifecycle (CDAR)
+          - or a e-reporting file
+
+        The `trackingId` is an external identifier and is used to track the flow by the sender
+        
+        The `sha256` is the footprint of the attached file:
+        >- if provided in the request: it should be checked once received
+        >- if not provided in the request: it should be computed and returned in the response
+      operationId: createFlow
+      parameters:
+        - name: Request-Id
+          in: header
+          description: Header parameter used to correlate logs from several components
+          required: false
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              required:
+                - file
+                - flowInfo
+              type: object
+              properties:
+                flowInfo:
+                  $ref: "#/components/schemas/FlowInfoDto"
+                file:
+                  type: string
+                  description: Flow file
+                  format: binary
+      responses:
+        "202":
+          description: OK - Response message once the flow has been uploaded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullFlowInfo"
+        "400":
+          description: "Error 400 : Bad request."
+          content:
+            application/json:
+              example:
+                errorCode: MISSING_REQUIRED_FIELD
+                errorMessage: Invalid request format
+        "401":
+          description: "Error 401 : Authentication error."
+          content:
+            application/json:
+              example:
+                errorCode: MISSING_TOKEN
+                errorMessage: null
+        "403":
+          description: "Error 403 : Forbidden."
+          content:
+            application/json:
+              example:
+                errorCode: FORBIDDEN_ACCESS
+                errorMessage: null
+        "500":
+          description: "Error 500 : Server Internal Error."
+          content:
+            application/json:
+              example:
+                errorCode: INTERNAL_ERROR
+                errorMessage: null
+        "503":
+          description: "Error 503 : Unavailable Resource."
+          content:
+            application/json:
+              example:
+                errorCode: RESOURCE_ERROR
+                errorMessage: null
+  /v1/flows/search:
+    post:
+      tags:
+        - API Flows
+      summary: "Retrieves a set of flows matching the provided search criteria:"
+      description: |
+        Retrieves a set of flows matching the provided search criteria:
+
+           - When setting flowId, do not specify other criteria
+           - Need at least one criterion to be specified
+           - Assuming a logical AND when combining criteria
+           - Assuming a logical OR for criteria allowing a list of values
+
+
+        Pagination works with pages:
+
+           - In the request, provide the page to be returned
+           - In the response, the total count of items
+      operationId: searchFlows
+      parameters:
+        - name: Request-Id
+          in: header
+          description: Header parameter used to correlate logs from several components
+          required: false
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchFlowParams"
+        required: true
+      responses:
+        "200":
+          description: OK - Response message when returning the results of a search request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchFlowContent"
+        "400":
+          description: "Error 400 : Bad request."
+          content:
+            application/json:
+              example:
+                errorCode: MISSING_REQUIRED_FIELD
+                errorMessage: Invalid request format
+        "401":
+          description: "Error 401 : Authentication error."
+          content:
+            application/json:
+              example:
+                errorCode: MISSING_TOKEN
+                errorMessage: null
+        "403":
+          description: "Error 403 : Forbidden."
+          content:
+            application/json:
+              example:
+                errorCode: FORBIDDEN_ACCESS
+                errorMessage: null
+        "500":
+          description: "Error 500 : Server Internal Error."
+          content:
+            application/json:
+              example:
+                errorCode: INTERNAL_ERROR
+                errorMessage: null
+        "503":
+          description: "Error 503 : Unavailable Resource."
+          content:
+            application/json:
+              example:
+                errorCode: RESOURCE_ERROR
+                errorMessage: null
+  /v1/flows/{flowId}:
+    get:
+      tags:
+        - API Flows
+      summary: Download the file of a flow
+      description: |
+        Download a file related to a given flow:
+        - an invoice
+        - a life cycle
+        - an e-reporting
+      operationId: geFlowByUid
+      parameters:
+        - name: Request-Id
+          in: header
+          description: Header parameter used to correlate logs from several components
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: flowId
+          in: path
+          description: Flow identifier
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: docType
+          in: query
+          description: >
+            This parameter allows to provide the type of file to be uploaded,
+            can be either one:
+
+            - Metadata [Default]: provides the flow metadata as a JSON payload,
+            no download
+
+            - Original: the document that has been initially sent/provided by
+            the emitter
+
+            - Converted: the document that has been optionally converted by the
+            system
+
+            - ReadableView: the document that has been optionally generated as
+            the readable file
+          required: false
+          schema:
+            type: string
+            default: Metadata
+            enum:
+              - Original
+              - Converted
+              - ReadableView
+              - Metadata
+      responses:
+        "200":
+          description: OK - Response message once the flow has been downloaded.
+          headers:
+            Content-Disposition:
+              description: Header specifying attached file name
+              style: simple
+              schema:
+                type: string
+          content:
+            application/octet-stream: {}
+        "400":
+          description: "Error 400 : Bad request."
+          content:
+            application/json:
+              example:
+                errorCode: MISSING_REQUIRED_FIELD
+                errorMessage: Invalid request format
+        "401":
+          description: "Error 401 : Authentication error."
+          content:
+            application/json:
+              example:
+                errorCode: MISSING_TOKEN
+                errorMessage: null
+        "403":
+          description: "Error 403 : Forbidden."
+          content:
+            application/json:
+              example:
+                errorCode: FORBIDDEN_ACCESS
+                errorMessage: null
+        "404":
+          description: "Error 404 : Resource Not Found."
+          content:
+            application/json:
+              example:
+                errorCode: MISSING_RESOURCE
+                errorMessage: Requested resource is Not Found
+        "500":
+          description: "Error 500 : Server Internal Error."
+          content:
+            application/json:
+              example:
+                errorCode: INTERNAL_ERROR
+                errorMessage: null
+        "503":
+          description: "Error 503 : Unavailable Resource."
+          content:
+            application/json:
+              example:
+                errorCode: RESOURCE_ERROR
+                errorMessage: null
+  /v1/healthcheck:
+    get:
+      tags:
+        - Supervisor
+      summary: Check whether the API service is up and running.
+      operationId: getHealth
+      parameters:
+        - name: Request-Id
+          in: header
+          description: Header parameter used to correlate logs from several components
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK - Operation succeeded
+        '500':
+          description: 'Error 500 : Server Internal Error.'
+          content:
+            application/json:
+              example:
+                errorCode: INTERNAL_ERROR
+                errorMessage: null
+        '503':
+          description: 'Error 503 : Unavailable Resource.'
+          content:
+            application/json:
+              example:
+                errorCode: RESOURCE_ERROR
+                errorMessage: null
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: >
+        Authentification client en Basic Auth :
+        `Authorization: Basic base64(urlencode(client_id):urlencode(client_secret))`
+  schemas:
+    TokenRequestDto:
+      required:
+        - password
+        - username
+      type: object
+      properties:
+        username:
+          type: string
+          description: Nom d'utilisateur
+          example: john.doe
+        password:
+          type: string
+          description: Mot de passe
+          example: secret123
+    AccessTokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        expires_in:
+          type: integer
+          format: int64
+        refresh_expires_in:
+          type: integer
+          format: int64
+        refresh_token:
+          type: string
+        token_type:
+          type: string
+        id_token:
+          type: string
+        not-before-policy:
+          type: integer
+          format: int32
+        session_state:
+          type: string
+        scope:
+          type: string
+        error:
+          type: string
+        error_description:
+          type: string
+        error_uri:
+          type: string
+    FlowInfoDto:
+      required:
+        - flowSyntax
+        - name
+      type: object
+      properties:
+        trackingId:
+          maxLength: 36
+          minLength: 0
+          type: string
+        name:
+          type: string
+        flowSyntax:
+          type: string
+          enum:
+            - CII
+            - UBL
+            - Factur-X
+            - CDAR
+            - FRR
+        processingRule:
+          type: string
+          enum:
+            - B2B
+            - B2BInt
+            - B2C
+            - B2G
+            - B2GInt
+            - OutOfScope
+            - B2GOutOfScope
+            - ArchiveOnly
+            - NotApplicable
+        flowProfile:
+          type: string
+          enum:
+            - Basic
+            - CIUS
+            - Extended-CTC-FR
+        sha256:
+          pattern: ^[a-f0-9]{64}$
+          type: string
+      description: >
+        Signaling of the flow:
+
+                . The tracking id is an external identifier and is used to track the flow by the sender
+                . The sha256 is the footprint of the attached file:
+                         . if provided in the request: it should be checked once received
+                         . if not provided in the request: it should be computed and returned in the response
+    FullFlowInfo:
+      required:
+        - flowSyntax
+        - name
+      type: object
+      properties:
+        flowId:
+          maxLength: 36
+          minLength: 0
+          type: string
+        submittedAt:
+          type: string
+          format: date-time
+        trackingId:
+          maxLength: 36
+          minLength: 0
+          type: string
+        name:
+          type: string
+        processingRule:
+          type: string
+          enum:
+            - B2B
+            - B2BInt
+            - B2C
+            - B2G
+            - B2GInt
+            - OutOfScope
+            - B2GOutOfScope
+            - ArchiveOnly
+            - NotApplicable
+        flowSyntax:
+          type: string
+          enum:
+            - CII
+            - UBL
+            - Factur-X
+            - CDAR
+            - FRR
+        flowProfile:
+          type: string
+          enum:
+            - Basic
+            - CIUS
+            - Extended-CTC-FR
+        sha256:
+          pattern: ^[a-f0-9]{64}$
+          type: string
+    FlowSearchFilters:
+      required:
+        - updatedAfter
+      type: object
+      properties:
+        updatedAfter:
+          type: string
+          format: date-time
+        updatedBefore:
+          type: string
+          format: date-time
+        processingRule:
+          type: array
+          items:
+            type: string
+            enum:
+              - B2B
+              - B2BInt
+              - B2C
+              - B2G
+              - B2GInt
+              - OutOfScope
+              - B2GOutOfScope
+              - ArchiveOnly
+              - NotApplicable
+        flowType:
+          type: array
+          items:
+            type: string
+            enum:
+              - CustomerInvoice
+              - SupplierInvoice
+              - StateInvoice
+              - CustomerInvoiceLC
+              - SupplierInvoiceLC
+              - StateCustomerInvoiceLC
+              - StateSupplierInvoiceLC
+              - AggregatedCustomerTransactionReport
+              - UnitaryCustomerTransactionReport
+              - AggregatedCustomerPaymentReport
+              - UnitaryCustomerPaymentReport
+              - UnitarySupplierTransactionReport
+              - MultiFlowReport
+        flowDirection:
+          type: array
+          items:
+            type: string
+            enum:
+              - Out
+              - In
+        trackingId:
+          maxLength: 36
+          minLength: 0
+          type: string
+        ackStatus:
+          type: string
+          enum:
+            - Pending
+            - Ok
+            - Error
+    SearchFlowParams:
+      type: object
+      properties:
+        limit:
+          type: integer
+          format: int32
+        where:
+          $ref: "#/components/schemas/FlowSearchFilters"
+    AcknowledgementDetailDto:
+      required:
+        - item
+        - level
+        - reasonCode
+        - reasonMessage
+      type: object
+      properties:
+        level:
+          type: string
+          enum:
+            - Error
+            - Warning
+        item:
+          type: string
+        reasonCode:
+          type: string
+          enum:
+            - EmptyAttachement
+            - AttachmentTypeError
+            - EmptyFlow
+            - OtherTechnicalError
+            - InvalidSchema
+            - FileSizeExceeded
+            - FlowTypeError
+            - AlreadyExistingFlow
+            - VirusFound
+            - ChecksumMismatch
+            - InvoiceLCInvalidStatus
+            - InvoiceLCStatusError
+            - InvoiceLCRuleError
+            - InvoiceLCAccessDenied
+            - InvoiceLCAmountError
+        reasonMessage:
+          type: string
+    AcknowledgementDto:
+      required:
+        - status
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - Pending
+            - Ok
+            - Error
+        details:
+          maxItems: 2147483647
+          minItems: 1
+          type: array
+          items:
+            $ref: "#/components/schemas/AcknowledgementDetailDto"
+    FlowDto:
+      type: object
+      properties:
+        submittedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        flowId:
+          type: string
+        trackingId:
+          type: string
+        flowType:
+          type: string
+          enum:
+            - CustomerInvoice
+            - SupplierInvoice
+            - StateInvoice
+            - CustomerInvoiceLC
+            - SupplierInvoiceLC
+            - StateCustomerInvoiceLC
+            - StateSupplierInvoiceLC
+            - AggregatedCustomerTransactionReport
+            - UnitaryCustomerTransactionReport
+            - AggregatedCustomerPaymentReport
+            - UnitaryCustomerPaymentReport
+            - UnitarySupplierTransactionReport
+            - MultiFlowReport
+        processingRule:
+          type: string
+          enum:
+            - B2B
+            - B2BInt
+            - B2C
+            - B2G
+            - B2GInt
+            - OutOfScope
+            - B2GOutOfScope
+            - ArchiveOnly
+            - NotApplicable
+        processingRuleSource:
+          type: string
+          enum:
+            - Input
+            - Computed
+        flowDirection:
+          type: string
+          enum:
+            - Out
+            - In
+        flowSyntax:
+          type: string
+          enum:
+            - CII
+            - UBL
+            - Factur-X
+            - CDAR
+            - FRR
+        flowProfile:
+          type: string
+          enum:
+            - Basic
+            - CIUS
+            - Extended-CTC-FR
+        acknowledgement:
+          $ref: "#/components/schemas/AcknowledgementDto"
+    SearchFlowContent:
+      type: object
+      properties:
+        total:
+          type: integer
+          format: int32
+        limit:
+          type: integer
+          format: int32
+        filter:
+          $ref: "#/components/schemas/FlowSearchFilters"
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/FlowDto"
+    OAuthTokenRequest:
+      required:
+        - grant_type
+      type: object
+      properties:
+        grant_type:
+          type: string
+        client_id:
+          type: string
+          description: _Can be sent on the body OR on the Basic Auth_
+        client_secret:
+          type: string
+          description: _Can be sent on the body OR on the Basic Auth_
+        scope:
+          type: string

@@ -1,0 +1,2108 @@
+openapi: 3.0.1
+info:
+  title: HUBTIMIZE PA (Customer management) OpenAPI definition
+  version: v1.2.7.2
+  description: >
+
+    _Par Esalink (Plateforme Agréée)_
+    
+   
+    Each endpoint must be called with an access token (Bearer). This token is
+    retrieved by a call to a token URL.
+
+    
+    In order to avoid any firewall block, please add to you requests header the following value :
+    
+     > For __TEST__ environment
+     >>- Key = `hubtimize-api-key`
+     >>- Value = `a3e49892-260f-4a3f-b497-3c9b68ee85d1`
+     
+     > For __PROD__ environment
+     >>- Key = `hubtimize-api-key`
+     >>- Value = _to be requested before go live_
+    
+    ---
+    
+    ## Changelog
+    
+     >- `v1.2.7` July 2026 
+     >>- __Change__ POST `/v1/oauth2/token` => __Breaking change__ in order to be compliant with oauth2 and RFC 6749 
+     >>>- Actual way of working is __disabled__ (user query Parameters)
+     >>>- Two ways of using this endpoint
+     >>>>- Using `application/x-www-form-urlencoded` with values __client_id__, __client_secret__ and __grant_type=client_credentials__
+     >>>>- HTTP Basic : using header `Authorization : Basic` with encoded credentials __Authorization : Basic base64(urlencode(client_id):urlencode(client_secret))__ and using `application/x-www-form-urlencoded` with value __grant_type=client_credentials__
+     >- `v1.2.6` June 2026 
+     >>- __Change__ PUT `/v1/customerPA/{customerID}` => email to receive documents to sign can be changed too ("customerEmail": "xxx")
+     >>- __Add__ POST `/v1/customerPA/{customerId}/resend-kyc-onboarding-email` => Resend onboarding email 
+     >>- __Add__ new identifiers status 
+     >>>- __UPDATE__ : Identifier date change requested
+     >>>- __WAITINGACTIVATE__ : identifier request at the customer creation, waiting the customer activation to be created
+     >>>- __ERROR__ : Error happening during the automatic setup, require human attention, managed by Esalink
+     >- `v1.2.5` April 2026 
+     >>- __Add__ `/v1/oauth2/token` => standard oauth2 token api
+     >>- __Change__ management of customer users
+     >>>- `POST /v1/customerPA/{customerID}/user`
+     >>>- `POST /v1/customerPA/{customerID}/user/search`
+     >>>- `GET /v1/customerPA/{customerID}/user/{userId}`
+     >>>- `PUT /v1/customerPA/{customerID}/user/{userId}`
+     >>- __Add__ management of customer identifiers
+     >>>- `POST /v1/customerPA/{customerID}/identifier`
+     >>>- `POST /v1/customerPA/{customerID}/identifier/search`
+     >>>- `GET /v1/customerPA/{customerID}/identifier/{identifierId}`
+     >>>- `PUT /v1/customerPA/{customerID}/identifier/{identifierId}`
+     >>>- `DELETE /v1/customerPA/{customerID}/identifier/{identifierId}`
+    >- `v1.2.4` March 2026
+     >>- __Add__ optional field `dateStart` on `POST /v1/customerPA`
+     >>- Field `electronicAddresses ` is now __optional__ on `POST /v1/customerPA`
+     >>- __Update__ management of customer APIs
+     >>>- `POST /v1/customerPA`
+     >>>- `PUT /v1/customerPA/{customerID}`
+     >>>- `GET /v1/customerPA/{customerID} `
+     >>>- `POST /v1/search`
+     
+    ---
+
+    ## CUSTOMER Api
+
+     The __CustomerPA Service__ API allows you to:
+     >- Manage your customers
+     >- Manage your customer's users
+
+    A __customer__ is defined by
+
+     >- an EDI Entity (for technical purpose), contains
+     >>- A name (unique)
+     >>- A parent entity
+     >>- An email (required, to receive on boarding email)
+     >>- A language (optional)
+     >>- A logo (optional, by default the one from the parent will be used)
+     >>- Identifiers list (optional, 0225 for France eInvoicing, 0088, 0002, 0208 for Belgium, etc.)
+     >- an eInvoice Entity (for legal purpose), contains
+     >>- An EDI entity
+     >>- A legal entity name
+     >>- Postal address
+     >>- Legal identifier (SIREN, Company code, etc.)
+     >>- VAT codes (optional)
+     >>- Plateforme agrée service (send/receive eInvoiceFR)
+
+     __Customer management__
+
+     >- `POST /v1/customerPA` : Create a customer
+     >- `POST /v1/customerPA/search` : Search a customer
+     >- `GET /v1/customerPA/{customerId}` : Get a customer
+     >- `PUT /v1/customerPA/{customerId}` : Update a customer
+     
+     A customer status can be
+     >- ACTIVE : Validated by esalink and ready to be used (at least for sending, for receiving, need to be sure the related receiving identifier is "Active")
+     >- INACTIVE : Disabled customer
+     >- WAITING_VALIDATION : Customer waiting to be validated by Esalink
+     >- REJECTED : Customer rejected by Esalink
+
+     Create a customer without any identifier will send __an onboarding email for identity and company verification (KYC/KYB)__
+
+     Create a customer with identifier will :
+     >- __Create identifier request__ for each identifier request (based on send/receive option and start date selected)
+     >- Send __an onboarding email for identity and company verification (KYC/KYB) and, if receiving is activated, register lines on directory__
+
+     
+     __Customer's API user management__
+     >- `POST /v1/customerPA/{customerID}/user` : Create a customer's API user
+     >- `GET /v1/customerPA/{customerID}/user` : List all customer's API user
+     >- `GET /v1/customerPA/{customerID}/user/{userId}` : Get a specific customer's API user
+     >- `PUT /v1/customerPA/{customerID}/user/{userId}` : Update a API customer
+     >- `POST /v1/customerPA/{customerID}/user/{userId}/clientSecret` : generate a new client secret for this API customer
+
+     When creating a customer's API user, __a clientId and a clientSecret__ are generated (they still can be used as username/password on the tokan API).
+
+
+     A customer's API user status can be
+     >- enabled : enable = true 
+     >- disabled : enable = false
+
+     __Customer's identifiers management__ (Identifier can be an identifier on administration french directory, an address on Peppol Network, etc.)
+     >- `POST /v1/customerPA/{customerID}/identifier` : Request a new identifier for the customer
+     >- `POST /v1/customerPA/{customerID}/identifier/search` : Search all identifiers for this customer
+     >- `GET /v1/customerPA/{customerID}/identifier` : Get a specific identifier detail
+     >- `PUT /v1/customerPA/{customerID}/identifier` : Update an identifier (only on Status NEW, REFUSED, DONE)
+     >- `DELETE /v1/customerPA/{customerID}/identifier` : Remove an identifier (only for status NEW, REFUSED, DONE)
+     
+     A customer identifier can be
+     >- NEW : New identifier request _(can be updated or deleted)_
+     >- DELETE : Deleted identifiers
+     >- IN_PROGRESS : Identifier setup currently in progress by Esalink _(identifier can't be updated or deleted)_
+     >- UPDATE : Identifier date change requested
+     >- WAITINGACTIVATE : identifier request at the customer creation, waiting the customer activation to be created
+     >- WAITINGPEPPOL : Peppol realease ask to previous access point, waiting return _(identifier can't be updated or deleted)_
+     >- WAITINGOPTIN : Docusign PDF (OPTIN) sent for new identifier, waiting customer signature _(identifier can't be updated or deleted)_
+     >- REFUSED : Identifier request refused by Esalink (reason in comment)
+     >- ERROR : Error happening during the automatic setup, require human attention, managed by Esalink
+     >- _DONE_ This status is not returned but a calculated status is sent instead, based on activation date
+     >>- Active : Identifier active on requested scope (Peppol only for Sending, AIFE Directory + Peppol for France receiving, etc.)
+     >>- Inactive : Identifier reach it's end date
+     >>- Upcoming : Setup ready, It'll be activated at the requested date
+     
+     All request will be validated __once a day__, if a "register document" signed by customer is needed, __PDF pre-filled document will be sent to the customer__
+
+     ---
+     
+     # API technical documentation
+servers:
+  - url: https://ppd.hubtimize.fr/api/orchestrator/
+    description: Test environment
+  - url: https://hubtimize.fr/api/orchestrator/
+    description: Production environment (not ready)
+paths:
+  /v1/token:
+    post:
+      tags:
+        - API Token
+      operationId: token
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRequestDto'
+        required: true
+      responses:
+        '200':
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/AccessTokenResponse'
+  /v1/oauth2/token:
+    post:
+      tags:
+        - API Token
+      operationId: oauthToken
+      security:
+        - basicAuth: []   # Mode 1 : credentials dans l'en-tête
+        - {}              # Mode 2 : credentials dans le body
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/OAuthTokenRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessTokenResponse"
+  /v1/healthcheck:
+    get:
+      tags:
+        - Supervisor
+      summary: Check whether the API service is up and running.
+      operationId: getHealth
+      parameters:
+        - name: Request-Id
+          in: header
+          description: Header parameter used to correlate logs from several components
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK - Operation succeeded
+        '500':
+          description: 'Error 500 : Server Internal Error.'
+          content:
+            application/json:
+              example:
+                errorCode: INTERNAL_ERROR
+                errorMessage: null
+        '503':
+          description: 'Error 503 : Unavailable Resource.'
+          content:
+            application/json:
+              example:
+                errorCode: RESOURCE_ERROR
+                errorMessage: null
+  /v1/customerPA/{customerId}:
+    get:
+      tags:
+        - Customer PA
+      summary: Get customer by ID
+      description: Retrieves a customer using its unique identifier.
+      operationId: getCustomer
+      parameters:
+        - name: customerId
+          in: path
+          description: Unique identifier of the customer.
+          required: true
+          schema:
+            type: integer
+            example: 12345
+      responses:
+        "200":
+          description: Customer successfully retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerResponseDTO"
+        "400":
+          description: Bad request. The request is invalid or cannot be completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Unauthorized. The request requires user authentication.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Forbidden. The server understood the request but denied access.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Not found. No resource exists at the given URI.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "408":
+          description: Request timeout exceeded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "422":
+          description: Data validation error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Too many requests in a given time frame.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "500":
+          description: Internal Server Error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "501":
+          description: Not implemented.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Service unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        default:
+          description: An error has occurred - see the status code and JSON response for
+            more information.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+    put:
+      tags:
+        - Customer PA
+      summary: Update customer information
+      description: Updates an existing customer using the provided data.
+      operationId: updateCustomer
+      parameters:
+        - name: customerId
+          in: path
+          description: Unique identifier of the customer.
+          required: true
+          schema:
+            type: integer
+            example: 12345
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCustomerDTO"
+        required: true
+      responses:
+        "200":
+          description: Customer successfully updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerResponseDTO"
+        "400":
+          description: Bad request. The request is invalid or cannot be completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Unauthorized. The request requires user authentication.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Forbidden. The server understood the request but denied access.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Not found. No resource exists at the given URI.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "408":
+          description: Request timeout exceeded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "422":
+          description: Data validation error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Too many requests in a given time frame.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "500":
+          description: Internal Server Error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "501":
+          description: Not implemented.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Service unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        default:
+          description: An error has occurred - see the status code and JSON response for
+            more information.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+  /v1/customerPA/{customerId}/resend-kyc-onboarding-email:
+    post:
+      tags:
+        - Customer PA
+      summary: Resend KYC onboarding email
+      description: Resends the KYC onboarding email for the specified EDI entity.
+      operationId: resendKycOnboardingEmail
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: KYC onboarding email successfully resent.
+          content:
+            "*/*":
+              schema:
+                type: object
+        "400":
+          description: Bad request. The request is invalid or cannot be completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Unauthorized. The request requires user authentication.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Forbidden. The server understood the request but denied access.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Not found. No resource exists at the given URI.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "408":
+          description: Request timeout exceeded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "422":
+          description: Data validation error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Too many requests in a given time frame.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "500":
+          description: Internal Server Error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "501":
+          description: Not implemented.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Service unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        default:
+          description: An error has occurred - see the status code and JSON response for
+            more information.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+  /v1/customerPA/{customerId}/user/{userId}/clientSecret:
+    post:
+      tags:
+        - Customer PA User
+      summary: Regenerate client secret for specified user.
+      description: Regenerates a new client secret for the user with given ID. Obeys
+        existing client secret patterns.
+      operationId: regenerateClientCredentials
+      parameters:
+        - name: customerId
+          in: path
+          description: Unique identifier of the customer.
+          required: true
+          schema:
+            type: integer
+            example: 13123155
+        - name: userId
+          in: path
+          description: Unique identifier of the user to generate client secret.
+          required: true
+          schema:
+            type: string
+            example: 550e8400-e29b-41d4-a716-446655440000
+      responses:
+        "200":
+          description: New client secret successfully generated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EDIUserCreationResponseDTO"
+        "400":
+          description: Bad request. The request is invalid or cannot be completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Unauthorized. The request requires user authentication.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Forbidden. The server understood the request but denied access.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Not found. No resource exists at the given URI.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "408":
+          description: Request timeout exceeded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "422":
+          description: Data validation error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Too many requests in a given time frame.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "500":
+          description: Internal Server Error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "501":
+          description: Not implemented.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Service unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        default:
+          description: An error has occurred - see the status code and JSON response for
+            more information.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+  /v1/customerPA/{customerId}/identifier/search:
+    post:
+      tags:
+        - Customer PA identifiers
+      summary: Search identifiers for a customer
+      description: Retrieves a paginated list of identifiers for a customer.
+      operationId: getAllIdentifiersForCustomer
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: offset
+          in: query
+          required: false
+          schema:
+            minimum: 0
+            type: integer
+            format: int32
+            default: 0
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            default: 25
+      responses:
+        "200":
+          description: Identifiers retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerIdentifiersPageResponseDTO"
+        "400":
+          description: Bad request. The request is invalid or cannot be completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Unauthorized. The request requires user authentication.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Forbidden. The server understood the request but denied access.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Not found. No resource exists at the given URI.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "408":
+          description: Request timeout exceeded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "422":
+          description: Data validation error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Too many requests in a given time frame.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "500":
+          description: Internal Server Error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "501":
+          description: Not implemented.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Service unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        default:
+          description: An error has occurred - see the status code and JSON response for
+            more information.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+  /v1/customerPA/{customerId}/user:
+    get:
+      tags:
+        - Customer PA User
+      summary: List all users for a specific customer.
+      description: |
+        Retrieves a list of users associated with the specified customer.
+      operationId: searchUsersOd
+      parameters:
+        - name: customerId
+          in: path
+          description: Unique identifier of the customer.
+          required: true
+          schema:
+            type: integer
+            example: 13123155
+      responses:
+        "200":
+          description: Users successfully retrieved.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ODUserDetailsDTO"
+        "400":
+          description: Bad request. The request is invalid or cannot be completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Unauthorized. The request requires user authentication.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Forbidden. The server understood the request but denied access.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Not found. No resource exists at the given URI.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "408":
+          description: Request timeout exceeded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "422":
+          description: Data validation error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Too many requests in a given time frame.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "500":
+          description: Internal Server Error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "501":
+          description: Not implemented.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Service unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        default:
+          description: An error has occurred - see the status code and JSON response for
+            more information.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+    post:
+      tags:
+        - Customer PA User
+      summary: Create a new user for a specific customer.
+      description: Creates a new user associated with a given customer
+      operationId: createUserOd
+      parameters:
+        - name: customerId
+          in: path
+          description: Unique identifier of the customer.
+          required: true
+          schema:
+            type: integer
+            example: 13123155
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ODUserCreateDTO"
+        required: true
+      responses:
+        "201":
+          description: user successfully created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EDIUserCreationResponseDTO"
+        "400":
+          description: Bad request. The request is invalid or cannot be completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Unauthorized. The request requires user authentication.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Forbidden. The server understood the request but denied access.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Not found. No resource exists at the given URI.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "408":
+          description: Request timeout exceeded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "422":
+          description: Data validation error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Too many requests in a given time frame.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "500":
+          description: Internal Server Error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "501":
+          description: Not implemented.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Service unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        default:
+          description: An error has occurred - see the status code and JSON response for
+            more information.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+  /v1/customerPA/{customerId}/user/{userId}:
+    get:
+      tags:
+        - Customer PA User
+      summary: Retrieve an existing user for a specific customer.
+      description: Fetches detailed information about a specific user associated with
+        a given customer.
+      operationId: getUserOd
+      parameters:
+        - name: customerId
+          in: path
+          description: Unique identifier of the customer.
+          required: true
+          schema:
+            type: integer
+            example: 13123155
+        - name: userId
+          in: path
+          description: Unique identifier of the user to retrieve.
+          required: true
+          schema:
+            type: string
+            example: 550e8400-e29b-41d4-a716-446655440000
+      responses:
+        "200":
+          description: User successfully retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ODUserDetailsDTO"
+        "400":
+          description: Bad request. The request is invalid or cannot be completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Unauthorized. The request requires user authentication.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Forbidden. The server understood the request but denied access.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Not found. No resource exists at the given URI.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "408":
+          description: Request timeout exceeded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "422":
+          description: Data validation error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Too many requests in a given time frame.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "500":
+          description: Internal Server Error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "501":
+          description: Not implemented.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Service unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        default:
+          description: An error has occurred - see the status code and JSON response for
+            more information.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+    put:
+      tags:
+        - Customer PA User
+      summary: Update an existing user for a specific customer.
+      description: Updates the information of an existing user associated with a given
+        customer.
+      operationId: updateUserOd
+      parameters:
+        - name: customerId
+          in: path
+          description: Unique identifier of the customer.
+          required: true
+          schema:
+            type: integer
+            example: 13123155
+        - name: userId
+          in: path
+          description: Unique identifier of the user to be updated.
+          required: true
+          schema:
+            type: string
+            example: 550e8400-e29b-41d4-a716-446655440000
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EDIUserOdUpdateDTO"
+        required: true
+      responses:
+        "200":
+          description: User successfully updated.
+          content:
+            "*/*":
+              schema:
+                type: object
+        "400":
+          description: Bad request. The request is invalid or cannot be completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Unauthorized. The request requires user authentication.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Forbidden. The server understood the request but denied access.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Not found. No resource exists at the given URI.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "408":
+          description: Request timeout exceeded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "422":
+          description: Data validation error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Too many requests in a given time frame.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "500":
+          description: Internal Server Error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "501":
+          description: Not implemented.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Service unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        default:
+          description: An error has occurred - see the status code and JSON response for
+            more information.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+  /v1/customerPA:
+    post:
+      tags:
+        - Customer PA
+      summary: Create a new customer.
+      description: >
+        Creates a new customer in the system using the provided details.
+
+        The request body must contain all required information to create the
+        customer.
+
+        Returns the created customer object.
+      operationId: createCustomer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCustomerDTO"
+        required: true
+      responses:
+        "201":
+          description: Customer successfully created.
+          content:
+            application/json:
+              schema:
+                type: string
+                description: Object containing the newly created customer's ID.
+                example:
+                  customerId: 12345
+        "400":
+          description: Bad request. The request is invalid or cannot be completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Unauthorized. The request requires user authentication.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Forbidden. The server understood the request but denied access.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Not found. No resource exists at the given URI.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "408":
+          description: Request timeout exceeded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "422":
+          description: Data validation error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Too many requests in a given time frame.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "500":
+          description: Internal Server Error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "501":
+          description: Not implemented.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Service unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        default:
+          description: An error has occurred - see the status code and JSON response for
+            more information.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+  /v1/customerPA/{customerId}/identifier:
+    get:
+      tags:
+        - Customer PA identifiers
+      summary: Get a specific Customer PA Identifier
+      description: Retrieves a specific identifier for the given customer.
+      operationId: getCustomerPaIdentifier
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: identifier
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: qualifier
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Identifier retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerPaIdentifierResponse"
+        "400":
+          description: Bad request. The request is invalid or cannot be completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Unauthorized. The request requires user authentication.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Forbidden. The server understood the request but denied access.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Not found. No resource exists at the given URI.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "408":
+          description: Request timeout exceeded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "422":
+          description: Data validation error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Too many requests in a given time frame.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "500":
+          description: Internal Server Error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "501":
+          description: Not implemented.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Service unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        default:
+          description: An error has occurred - see the status code and JSON response for
+            more information.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+    put:
+      tags:
+        - Customer PA identifiers
+      summary: Update a Customer PA Identifier
+      description: "Updates an existing identifier. Rules: only NEW/REFUSED/DONE
+        allowed, startDate cannot change if active, startDate <= endDate. Status
+        will be reset to NEW."
+      operationId: updateIdentifier
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: identifier
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: qualifier
+          in: query
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCustomerPaIdentifierRequest"
+        required: true
+      responses:
+        "200":
+          description: Identifier updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerPaIdentifierResponse"
+        "400":
+          description: Bad request. The request is invalid or cannot be completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Unauthorized. The request requires user authentication.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Forbidden. The server understood the request but denied access.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Not found. No resource exists at the given URI.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "408":
+          description: Request timeout exceeded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "422":
+          description: Data validation error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Too many requests in a given time frame.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "500":
+          description: Internal Server Error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "501":
+          description: Not implemented.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Service unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        default:
+          description: An error has occurred - see the status code and JSON response for
+            more information.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+    post:
+      tags:
+        - Customer PA identifiers
+      summary: Create a new Customer PA Identifier
+      description: |
+        Creates a new identifier for the given customer.
+        The request body must contain all required information.
+        Returns the created identifier object.
+      operationId: createCustomerPaIdentifier
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerPaIdentifierRequest"
+        required: true
+      responses:
+        "201":
+          description: Identifier successfully created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerPaIdentifierResponse"
+        "400":
+          description: Bad request. The request is invalid or cannot be completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Unauthorized. The request requires user authentication.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Forbidden. The server understood the request but denied access.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Not found. No resource exists at the given URI.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "408":
+          description: Request timeout exceeded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "422":
+          description: Data validation error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Too many requests in a given time frame.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "500":
+          description: Internal Server Error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "501":
+          description: Not implemented.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Service unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        default:
+          description: An error has occurred - see the status code and JSON response for
+            more information.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+    delete:
+      tags:
+        - Customer PA identifiers
+      summary: Delete a Customer PA Identifier
+      description: |
+        Deletes a specific identifier for the given customer.
+        Rules:
+        - Only allowed if identifier status is NEW, REFUSED, or DONE.
+        - Only allowed if startDate > today + 5 days.
+        - The status will be updated to DELETE instead of hard deletion.
+      operationId: deleteIdentifier
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: identifier
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: qualifier
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Identifier deleted successfully
+          content:
+            "*/*":
+              schema:
+                type: object
+        "400":
+          description: Bad request. The request is invalid or cannot be completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Unauthorized. The request requires user authentication.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Forbidden. The server understood the request but denied access.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Not found. No resource exists at the given URI.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "408":
+          description: Request timeout exceeded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "422":
+          description: Data validation error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Too many requests in a given time frame.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "500":
+          description: Internal Server Error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "501":
+          description: Not implemented.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Service unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        default:
+          description: An error has occurred - see the status code and JSON response for
+            more information.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+  /v1/customerPA/search:
+    post:
+      tags:
+        - Customer PA
+      summary: Get all visible customers
+      description: Retrieves a list of all visible customers.
+      operationId: getAllCustomers
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            default: 25
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            default: 0
+      responses:
+        "200":
+          description: Customers successfully retrieved.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CustomerPageResponseDTO"
+        "400":
+          description: Bad request. The request is invalid or cannot be completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "401":
+          description: Unauthorized. The request requires user authentication.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "403":
+          description: Forbidden. The server understood the request but denied access.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "404":
+          description: Not found. No resource exists at the given URI.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "408":
+          description: Request timeout exceeded.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "422":
+          description: Data validation error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "429":
+          description: Too many requests in a given time frame.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "500":
+          description: Internal Server Error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "501":
+          description: Not implemented.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        "503":
+          description: Service unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+        default:
+          description: An error has occurred - see the status code and JSON response for
+            more information.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorMessage"
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: >
+        Authentification client en Basic Auth :
+        `Authorization: Basic base64(urlencode(client_id):urlencode(client_secret))`
+  schemas:
+    UpdateCustomerDTO:
+      type: object
+      properties:
+        customerName:
+          maxLength: 255
+          minLength: 0
+          type: string
+        addressLine1:
+          maxLength: 255
+          minLength: 0
+          type: string
+        addressLine2:
+          maxLength: 255
+          minLength: 0
+          type: string
+        addressLine3:
+          maxLength: 255
+          minLength: 0
+          type: string
+        postalCode:
+          maxLength: 255
+          minLength: 0
+          type: string
+        city:
+          maxLength: 255
+          minLength: 0
+          type: string
+        country:
+          maxLength: 255
+          minLength: 0
+          type: string
+        customerEmail:
+          maxLength: 255
+          minLength: 0
+          type: string
+        logo:
+          type: string
+          description: Customer logo encoded in Base64 with metadata
+        language:
+          pattern: ^[a-z]{2}_[A-Z]{2}$
+          type: string
+      description: Payload containing customer data to update.
+    ErrorMessage:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+    CustomerResponseDTO:
+      type: object
+      properties:
+        customerId:
+          type: integer
+          format: int64
+        activationStatus:
+          type: string
+          enum:
+            - ACTIVE
+            - INACTIVE
+            - WAITING_VALIDATION
+            - REJECTED
+        stateReason:
+          type: string
+        customerName:
+          type: string
+        customerLegalId:
+          type: string
+        electronicAddresses:
+          type: array
+          items:
+            $ref: "#/components/schemas/ElectronicAddressDTO"
+        customerVat:
+          type: string
+        customerEmail:
+          type: string
+        addressLine1:
+          type: string
+        addressLine2:
+          type: string
+        addressLine3:
+          type: string
+        postalCode:
+          type: string
+        city:
+          type: string
+        country:
+          type: string
+        language:
+          type: string
+        logo:
+          type: string
+        activationPa:
+          type: string
+          enum:
+            - Y
+            - N
+        receptionPa:
+          type: string
+          enum:
+            - Y
+            - N
+        startDate:
+          type: string
+    ElectronicAddressDTO:
+      required:
+        - electronicAddress
+        - qualifier
+      type: object
+      properties:
+        electronicAddress:
+          type: string
+          example: "123456789"
+        qualifier:
+          type: string
+          example: "0225"
+    EDIUserOdUpdateDTO:
+      required:
+        - isEnabled
+        - language
+      type: object
+      properties:
+        language:
+          pattern: ^[a-z]{2}_[A-Z]{2}$
+          type: string
+        isEnabled:
+          type: boolean
+    UpdateCustomerPaIdentifierRequest:
+      type: object
+      properties:
+        startDate:
+          pattern: ^(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[0-2])-([0-9]{4})$
+          type: string
+          description: Start date in DD-MM-YYYY format, min 10 days in the future
+          example: 06-04-2026
+        endDate:
+          pattern: ^(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[0-2])-([0-9]{4})$
+          type: string
+          description: Optional end date in DD-MM-YYYY format
+          example: 30-04-2026
+    CustomerPaIdentifierResponse:
+      type: object
+      properties:
+        customerId:
+          type: integer
+          format: int64
+        identifier:
+          type: string
+        qualifier:
+          type: string
+        identifierStatus:
+          type: string
+          enum:
+            - NEW
+            - DELETE
+            - UPDATE
+            - IN_PROGRESS
+            - WAITINGACTIVATE
+            - WAITINGPEPPOL
+            - WAITINGOPTIN
+            - REFUSED
+            - ERROR
+            - DONE
+            - Active
+            - Inactive
+            - Upcoming
+        identifierType:
+          type: string
+          enum:
+            - SEND
+            - RECEIVE
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        comment:
+          type: string
+    TokenRequestDto:
+      required:
+        - password
+        - username
+      type: object
+      properties:
+        username:
+          type: string
+          description: Nom d'utilisateur
+          example: john.doe
+        password:
+          type: string
+          description: Mot de passe
+          example: secret123
+    AccessTokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        expires_in:
+          type: integer
+          format: int64
+        refresh_expires_in:
+          type: integer
+          format: int64
+        refresh_token:
+          type: string
+        token_type:
+          type: string
+        id_token:
+          type: string
+        not-before-policy:
+          type: integer
+          format: int32
+        session_state:
+          type: string
+        scope:
+          type: string
+        error:
+          type: string
+        error_description:
+          type: string
+        error_uri:
+          type: string
+    CreateCustomerDTO:
+      required:
+        - addressLine1
+        - city
+        - country
+        - customerEmail
+        - customerLegalId
+        - customerName
+        - postalCode
+      type: object
+      properties:
+        customerName:
+          maxLength: 255
+          minLength: 0
+          type: string
+          example: "Société Machin SAS"
+        customerLegalId:
+          type: string
+          example: "123456789"
+        electronicAddresses:
+          type: array
+          items:
+            $ref: "#/components/schemas/ElectronicAddressDTO"
+        customerVat:
+          maxLength: 255
+          minLength: 0
+          type: string
+          example: "FR99123456789"
+        customerEmail:
+          type: string
+          example: "representantlegal@societe-machin.fr"
+        addressLine1:
+          maxLength: 255
+          minLength: 0
+          type: string
+          example: "3 rue des fleurs en pot"
+        addressLine2:
+          maxLength: 255
+          minLength: 0
+          type: string
+        addressLine3:
+          maxLength: 255
+          minLength: 0
+          type: string
+        postalCode:
+          maxLength: 255
+          minLength: 0
+          type: string
+          example: "16000"
+        city:
+          maxLength: 255
+          minLength: 0
+          type: string
+          example: "Angouleme"
+        country:
+          pattern: ^[A-Z]{2}$
+          type: string
+          default: FR
+        language:
+          pattern: ^[a-z]{2}_[A-Z]{2}$
+          type: string
+          default: fr_FR
+        logo:
+          type: string
+          description: Customer logo encoded in Base64 with metadata
+        activationPA:
+          type: string
+          description: activation PA flag (Y/N)
+          default: Y
+          enum:
+            - Y
+            - N
+        receptionPa:
+          type: string
+          description: Reception PA flag (Y/N)
+          default: Y
+          enum:
+            - Y
+            - N
+        apiUser:
+          type: string
+          description: Api user flag (Y/N)
+          default: Y
+          enum:
+            - Y
+            - N
+        startDate:
+          pattern: ^(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[0-2])-([0-9]{4})$
+          type: string
+          description: Start date in DD-MM-YYYY format (minimum 10 days in the future).
+            Required when electronicAddresses is provided
+          example: 01-09-2026
+      description: Payload containing information to create a new customer.
+    ODUserCreateDTO:
+      required:
+        - language
+      type: object
+      properties:
+        language:
+          pattern: ^[a-z]{2}_[A-Z]{2}$
+          type: string
+    EDIUserCreationResponseDTO:
+      type: object
+      properties:
+        clientId:
+          type: string
+          description: Generated client ID (UUID) for the EDI user
+          example: 550e8400-e29b-41d4-a716-446655440000
+        clientSecret:
+          type: string
+          description: Client secret associated with the clientId for the EDI user
+          example: yegAgy@6aplUQH*xEA58?!ueS
+    CustomerPaIdentifierRequest:
+      required:
+        - addressingIdentifier
+        - addressingQualifier
+        - identifierType
+        - startDate
+      type: object
+      properties:
+        addressingIdentifier:
+          type: string
+        addressingQualifier:
+          type: string
+        identifierType:
+          type: string
+          enum:
+            - SEND
+            - RECEIVE
+        startDate:
+          pattern: ^(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[0-2])-([0-9]{4})$
+          type: string
+          description: Start date in DD-MM-YYYY format, min 10 days in the future
+          example: 06-04-2026
+        endDate:
+          pattern: ^(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[0-2])-([0-9]{4})$
+          type: string
+          description: Optional end date in DD-MM-YYYY format
+          example: 30-04-2026
+        comment:
+          type: string
+    CustomerIdentifiersPageResponseDTO:
+      type: object
+      properties:
+        limit:
+          type: integer
+          format: int32
+        offset:
+          type: integer
+          format: int32
+        total:
+          type: integer
+          format: int32
+        identifiers:
+          type: array
+          items:
+            $ref: "#/components/schemas/CustomerPaIdentifierResponse"
+    CustomerPageResponseDTO:
+      type: object
+      properties:
+        limit:
+          type: integer
+          format: int32
+        offset:
+          type: integer
+          format: int32
+        total:
+          type: integer
+          format: int32
+        customers:
+          type: array
+          items:
+            $ref: "#/components/schemas/CustomerResponseDTO"
+    ODUserDetailsDTO:
+      type: object
+      properties:
+        clientId:
+          type: string
+        customerId:
+          type: integer
+          format: int64
+        customerName:
+          type: string
+        language:
+          type: string
+        enabled:
+          type: boolean
+    OAuthTokenRequest:
+      required:
+        - grant_type
+      type: object
+      properties:
+        grant_type:
+          type: string
+        client_id:
+          type: string
+          description: _Can be sent on the body OR on the Basic Auth_
+        client_secret:
+          type: string
+          description: _Can be sent on the body OR on the Basic Auth_
+        scope:
+          type: string
