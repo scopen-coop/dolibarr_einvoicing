@@ -1448,11 +1448,6 @@ class FacturXProtocol extends CIIProtocol
 		$remise_already_used_line_level_ids = array();
 		$supplierPriceEntries = array(); // Collect product/price data to create supplier prices after invoice creation
 
-		$res = $this->createSupplierInvoiceLinesFromSource($supplierInvoice, $parsedLines, $remise_already_used_line_level_ids, $supplierPriceEntries, $return_messages, $flowId);
-		if ($res['res'] < 0) {
-			return $res;
-		}
-
 		// Create document level discounts (allowances) as discounts in Dolibarr
 		$globalDiscountIds = array();
 		if (!empty($parsedHeader['headerAllowancesCharges'])) {
@@ -1487,6 +1482,16 @@ class FacturXProtocol extends CIIProtocol
 			$orderLinkMessage = $this->_linkSupplierInvoiceToPurchaseOrder($supplierInvoice, $socId, $parsedHeader['orderReference'] ?? '');
 			if ($orderLinkMessage !== '') {
 				$return_messages[] = $orderLinkMessage;
+			}
+
+
+			// --------------------------------------------------
+			// Create supplier invoice lines
+			// --------------------------------------------------
+
+			$res = $this->createSupplierInvoiceLinesFromSource($supplierInvoice, $parsedLines, $remise_already_used_line_level_ids, $supplierPriceEntries, $return_messages, $flowId);
+			if ($res['res'] < 0) {
+				return $res;
 			}
 
 			$create_deposit_line = 0;
@@ -1633,5 +1638,17 @@ class FacturXProtocol extends CIIProtocol
 			// TODO : Save receivedFile in supplier invoice attachments
 			return ['res' => $supplierInvoiceId, 'message' => implode("\n", $return_messages), 'xml_data' => $embeddedXml];
 		}
+	}
+
+	/**
+	 * Extract XML from an input file content and return it
+	 *
+	 * @param  string $fileContent Raw file content
+	 * @return string The extracted XML content
+	 */
+	public function extractXmlFromFileContent(string $fileContent)
+	{
+		$extractedXml = ZugferdDocumentPdfReaderExt::getInvoiceDocumentContentFromContent($fileContent);
+		return $extractedXml;
 	}
 }
