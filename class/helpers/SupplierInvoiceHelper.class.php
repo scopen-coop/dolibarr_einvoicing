@@ -121,9 +121,21 @@ class SupplierInvoiceHelper
 
 		$amountErrors = [];
 
+		$isCreditNote = ($dolSupplierInvoice->type == FactureFournisseur::TYPE_CREDIT_NOTE);
+
 		foreach ($calculationRules as $calculationRule => $vatComputeMode) {
 			$details = self::getInvoiceDetailsForComparison($dolSupplierInvoice, $vatComputeMode);
 			$amountErrors[$calculationRule] = [];
+
+			if ($isCreditNote) {
+				$details['total_ht'] = abs($details['total_ht']);
+				$details['total_ttc'] = abs($details['total_ttc']);
+				$details['total_tva'] = abs($details['total_tva']);
+				foreach ($details['vat_by_rate'] as $rate => $rateDetails) {
+					$details['vat_by_rate'][$rate]['vat_amount'] = abs($rateDetails['vat_amount']);
+					$details['vat_by_rate'][$rate]['vat_basis_amount'] = abs($rateDetails['vat_basis_amount']);
+				}
+			}
 
 			// VAT excl. total
 			if (!self::areAmountsEqual($details['total_ht'], $parsedHeader['taxBasisTotalAmount'])) {
@@ -334,8 +346,9 @@ class SupplierInvoiceHelper
 		global $db, $user;
 
 		$sql = "SELECT rowid, flow_id, provider, xml_data FROM " . $db->prefix() . "einvoicing_document";
-		$sql .= " WHERE fk_element_type = '" . $db->escape('invoice_supplier') . "'";
+		$sql .= " WHERE fk_element_type = 'invoice_supplier'";
 		$sql .= " AND fk_element_id = " . (int) $supplierInvoiceId;
+		$sql .= " AND flow_type = 'SupplierInvoice'";
 		$sql .= " LIMIT 2";
 
 		$resql = $db->query($sql);
@@ -389,8 +402,9 @@ class SupplierInvoiceHelper
 		global $db;
 
 		$sql = "SELECT rowid FROM " . $db->prefix() . "einvoicing_document";
-		$sql .= " WHERE fk_element_type = '" . $db->escape('invoice_supplier') . "'";
+		$sql .= " WHERE fk_element_type = 'invoice_supplier'";
 		$sql .= " AND fk_element_id = " . (int) $supplierInvoiceId;
+		$sql .= " AND flow_type = 'SupplierInvoice'";
 		$sql .= " LIMIT 2";
 
 		$resql = $db->query($sql);
