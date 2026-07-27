@@ -57,8 +57,11 @@ class CIIProtocol extends AbstractProtocol
 	/** @const string Generated invoice file name */
 	protected const GENERATED_INVOICE_XML_FILE_NAME = 'einvoice.xml';
 
-	/** @const string The profile used to generate XML */
+	/** @const string Default profile used to generate XML, overridable with EINVOICING_XML_PROFILE */
 	protected const BUILD_XML_PROFILE = 'EN16931';
+
+	/** @var string[] Profiles buildXML() knows how to emit, and accepted values of EINVOICING_XML_PROFILE */
+	public const SUPPORTED_XML_PROFILES = ['MINIMUM', 'BASICWL', 'BASIC', 'EN16931', 'EXTENDED', 'EXTENDEDFR'];
 
 	/**
 	 * Maximum number of decimals allowed for the unit prices: Item net price (BT-146),
@@ -341,6 +344,8 @@ class CIIProtocol extends AbstractProtocol
 		 *   documentNotePMT: string,
 		 *   documentNotePMD: string,
 		 *   documentNoteAAB: string,
+		 *   documentNoteTXD: string,
+		 *   vatDueDateTypeCode: string,
 		 *   documentNotes: array,
 		 *   sellername: string,
 		 *   sellerids: string,
@@ -476,7 +481,7 @@ class CIIProtocol extends AbstractProtocol
 		 */
 		'
 		@phan-var-force Facture 			$object			The $invoice object used in entry on inc file, but completed.
-		@phan-var-force array{documentno:string,documenttypecode:null|string,documentdate:DateTimeInterface,invoiceCurrency:string|array<string>,taxCurrency:null,documentname:null,documentlanguage:string,effectiveSpecifiedPeriod:\'NA\',documentDeliveryDate:DateTimeInterface,invoicingPeriodStart:null,invoicingPeriodEnd:null,businessProcessId:string,isTestDocument:bool,documentNotePublic:string,documentNotePMT:string,documentNotePMD:string,documentNoteAAB:string,documentNotes:array,sellername:string,sellerids:string,sellerlineone:string,sellerlinetwo:string,sellerlinethree:string,sellerpostcode:string,sellercity:string,sellercountry:string,sellersubdivision:null,sellercontactpersonname:string,sellercontactdepartmentname:null,sellercontactphoneno:string,sellercontactfaxno:string,sellercontactemailaddr:string,sellerCommunicationUriScheme:string,sellerCommunicationUri:string,sellerGlobalIds:array<array{schemeID:string,value:string}>,sellerTaxRegistrations:array<array{type:string,value:string}>,sellervatnumber:string,sellerLegalOrgId:string,sellerLegalOrgScheme:string,sellerTradingName:string,buyername:string,buyerids:string,buyerlineone:string,buyerlinetwo:string,buyerlinethree:string,buyerpostcode:string,buyercity:string,buyercountry:string,buyersubdivision:null,buyervatnumber:string,buyerGlobalIds:array<array{schemeID:string,value:string}>,buyerLegalOrgId:string,buyerLegalOrgScheme:string,buyerTradingName:string,buyerReference:null|string,buyerCommunicationUriScheme:string,buyerCommunicationUri:string,buyercontactpersonname:null,buyercontactemailaddr:null,buyercontactphoneno:null,grandTotalAmount:float|int,duePayableAmount:float|int,lineTotalAmount:float|int,chargeTotalAmount:float,allowanceTotalAmount:float|int,taxBasisTotalAmount:float|int,taxTotalAmount:float|int,roundingAmount:null,totalPrepaidAmount:float|int,iban_id:int,iban:string,bic:string,accountName:string,accountRef:string,accountLabel:string,paymentDueDate:DateTimeInterface,paymentTermsText:string,headerAllowancesCharges:array,invoiceRefDocs:array|array<array{ref:string|int,date:DateTimeInterface,type:string}>,orderReference:string,contractReference:null|string,despatchAdviceRef:null,taxBreakdown:array|array<array<string,array>>,_chorus:bool,_depositlines:array|array<array{lineId:int,invoiceRef:string,invoiceDate:DateTimeInterface}>,_globalDiscounts:array|array<array{value:float,reason:string,taxRate:float,categoryVAT:string}>,_customerOrderReferenceList:string[],_project:Project|null,paymentMeansCode?:int,paymentMeansText?:string,_shipFromContactBill?:array{address:null|string,zip:null|string,town:null|string,country:string},_shipFromContactShip?:array{name:string,address:null|string,zip:null|string,town:null|string,country:string}} $invoiceData
+		@phan-var-force array{documentno:string,documenttypecode:null|string,documentdate:DateTimeInterface,invoiceCurrency:string|array<string>,taxCurrency:null,documentname:null,documentlanguage:string,effectiveSpecifiedPeriod:\'NA\',documentDeliveryDate:DateTimeInterface,invoicingPeriodStart:null,invoicingPeriodEnd:null,businessProcessId:string,isTestDocument:bool,documentNotePublic:string,documentNotePMT:string,documentNotePMD:string,documentNoteAAB:string,documentNoteTXD:string,documentNotes:array,vatDueDateTypeCode:string,sellername:string,sellerids:string,sellerlineone:string,sellerlinetwo:string,sellerlinethree:string,sellerpostcode:string,sellercity:string,sellercountry:string,sellersubdivision:null,sellercontactpersonname:string,sellercontactdepartmentname:null,sellercontactphoneno:string,sellercontactfaxno:string,sellercontactemailaddr:string,sellerCommunicationUriScheme:string,sellerCommunicationUri:string,sellerGlobalIds:array<array{schemeID:string,value:string}>,sellerTaxRegistrations:array<array{type:string,value:string}>,sellervatnumber:string,sellerLegalOrgId:string,sellerLegalOrgScheme:string,sellerTradingName:string,buyername:string,buyerids:string,buyerlineone:string,buyerlinetwo:string,buyerlinethree:string,buyerpostcode:string,buyercity:string,buyercountry:string,buyersubdivision:null,buyervatnumber:string,buyerGlobalIds:array<array{schemeID:string,value:string}>,buyerLegalOrgId:string,buyerLegalOrgScheme:string,buyerTradingName:string,buyerReference:null|string,buyerCommunicationUriScheme:string,buyerCommunicationUri:string,buyercontactpersonname:null,buyercontactemailaddr:null,buyercontactphoneno:null,grandTotalAmount:float|int,duePayableAmount:float|int,lineTotalAmount:float|int,chargeTotalAmount:float,allowanceTotalAmount:float|int,taxBasisTotalAmount:float|int,taxTotalAmount:float|int,roundingAmount:null,totalPrepaidAmount:float|int,iban_id:int,iban:string,bic:string,accountName:string,accountRef:string,accountLabel:string,paymentDueDate:DateTimeInterface,paymentTermsText:string,headerAllowancesCharges:array,invoiceRefDocs:array|array<array{ref:string|int,date:DateTimeInterface,type:string}>,orderReference:string,contractReference:null|string,despatchAdviceRef:null,taxBreakdown:array|array<array<string,array>>,_chorus:bool,_depositlines:array|array<array{lineId:int,invoiceRef:string,invoiceDate:DateTimeInterface}>,_globalDiscounts:array|array<array{value:float,reason:string,taxRate:float,categoryVAT:string}>,_customerOrderReferenceList:string[],_project:Project|null,paymentMeansCode?:int,paymentMeansText?:string,_shipFromContactBill?:array{address:null|string,zip:null|string,town:null|string,country:string},_shipFromContactShip?:array{name:string,address:null|string,zip:null|string,town:null|string,country:string}} $invoiceData
 		@phan-var-force array<int,array{lineid:int,linestatuscode:\'NA\',linestatusreasoncode:\'NA\',lineNote:null,prodname:string,proddesc:string,prodsellerid:string,prodbuyerid:null|string,prodglobalidtype:null|string,prodglobalid:null|string,prodmultilangs:array,prodClassificationCode:null|string,prodClassificationScheme:null|string,prodOriginCountry:null|string,netpriceamount:float,netpricebasisquantity:null|float,netpricebasisquantityunitcode:null|string,billedquantity:float,billedquantityunitcode:string,chargeFreeQuantity:null|float,chargeFreeQuantityunitcode:null|string,packageQuantity:null|float,packageQuantityunitcode:null|string,lineTotalAmount:float|string,totalAllowanceChargeAmount:null|float,categoryCode:string,typeCode:\'VAT\',rateApplicablePercent:string,tva_tx:float|string,vat_src_code:string,ExemptionReason:string,ExemptionReasonCode:string,calculatedAmount:null|float,lineAllowances:array,lineGrossPriceAllowances:array,lineremisepercent:\'NA\'|float,linePeriodStart:?DateTimeInterface,linePeriodEnd:?DateTimeInterface,additionalRefDocs:array,isDepositLine:bool,depositInvoiceRef:null|string,depositInvoiceDate:?DateTimeInterface,parentDocumentNo:null|string,is_deposit:int<0,1>,fk_remise:null|int,discountPercent:float,grosspriceamount:null|float,grosspricebasisquantity:null|float,grosspricebasisquantityunitcode:null|string}> $linesData
 		@phan-var-force string 				$outputlang		Value of $outputlangs->defaultlang
 		@phan-var-force Account				$account
@@ -493,7 +498,7 @@ class CIIProtocol extends AbstractProtocol
 		dol_mkdir(dirname($xmlfile));
 		dol_delete_file($xmlfile);
 
-		$xmlcontent = $this->buildXML($invoiceData, $linesData, static::BUILD_XML_PROFILE, $outputlangs);
+		$xmlcontent = $this->buildXML($invoiceData, $linesData, $this->getBuildXmlProfile(), $outputlangs);
 
 		// Local EN 16931 business rules safety net (warnings, or abort in strict mode)
 		$this->checkBusinessRules($xmlcontent);
@@ -650,7 +655,11 @@ class CIIProtocol extends AbstractProtocol
 	 */
 	public function createSupplierInvoiceFromSource($file, $ReadableViewFile = null, $flowId = '')
 	{
-		global $conf;
+		global $conf, $db;
+
+		// Transaction level before the import, to close only the transaction opened by
+		// doCreateSupplierInvoiceFromSource() and never one owned by a caller.
+		$transactionLevel = $db->transaction_opened;
 
 		$tempDir = $conf->einvoicing->dir_temp;
 		if (!dol_is_dir($tempDir)) {
@@ -670,6 +679,17 @@ class CIIProtocol extends AbstractProtocol
 		} finally {
 			$failed = !is_array($result) || !isset($result['res']) || $result['res'] < 0;
 			$this->cleanupIncomingTempFiles($tempDir, $tempFile, $tempFileReadableView, 'einvoice.' . static::INVOICE_FILE_EXTENSION, 'einvoice_readable.pdf', $failed);
+
+			// The invoice import transaction is opened by doCreateSupplierInvoiceFromSource() once the
+			// vendor has been synchronized. Close it here so every early return - and any exception -
+			// leaves a clean transaction state.
+			if ($db->transaction_opened > $transactionLevel) {
+				if ($failed) {
+					$db->rollback();
+				} else {
+					$db->commit();
+				}
+			}
 		}
 
 		return $result;
@@ -731,6 +751,8 @@ class CIIProtocol extends AbstractProtocol
 	/**
 	 * Build the supplier invoice from a received CII document written to a per-call working file.
 	 * The temp-file lifecycle is owned by createSupplierInvoiceFromSource() (the public wrapper).
+	 * The vendor synchronization runs in its own transaction, opened and closed here. The invoice
+	 * import transaction is opened here too, right after, but closed by that same wrapper.
 	 *
 	 * @param  string			$file                 Raw CII XML content
 	 * @param  string|null		$ReadableViewFile     Optional readable view (PDP-generated readable PDF)
@@ -771,11 +793,21 @@ class CIIProtocol extends AbstractProtocol
 		// Sync or create supplier based on seller info.
 		// Done before the duplicate/ref-docs checks below so those checks can be scoped to this supplier
 		// (ref_supplier is only unique per supplier, not globally - see issue about cross-supplier collisions).
+		//
+		// The vendor is reference data, not part of the invoice: it gets its own transaction, committed
+		// before the import starts. A business error raised further down - a product that cannot be
+		// auto-created, a referenced document missing - must not roll back the thirdparty the operator is
+		// precisely being asked to complete: the "create the product" and "map the product" links returned
+		// with that error carry its socid, so a rolled back vendor makes them point to a thirdparty that
+		// never existed.
+		$db->begin();
+
 		$syncSocRes = $this->_syncOrCreateThirdpartyFromEInvoiceSeller($parsedHeader, 'dolibarr', $flowId);
 
 		$socId = $syncSocRes['res'];
 		$return_messages[] = $syncSocRes['message'];
 		if ($socId < 0) {
+			$db->rollback();
 			return [
 				'res' => -1,
 				'message' => 'Thirdparty sync or creation error: ' . implode("<br>\n", $return_messages),
@@ -785,6 +817,13 @@ class CIIProtocol extends AbstractProtocol
 				'actiondata' => $syncSocRes['actiondata'] ?? null
 			];
 		}
+
+		$db->commit();
+
+		// From this point on, everything belongs to the invoice import (products, invoice, lines) and
+		// stays atomic. This second transaction is closed (commit or rollback) by
+		// createSupplierInvoiceFromSource(), the public wrapper.
+		$db->begin();
 
 		// Load supplier (thirdparty)
 		require_once DOL_DOCUMENT_ROOT . '/fourn/class/fournisseur.class.php';
@@ -1627,6 +1666,32 @@ class CIIProtocol extends AbstractProtocol
 	// =====================================================================
 
 	/**
+	 * Profile actually used to build the XML.
+	 *
+	 * Defaults to the protocol's own BUILD_XML_PROFILE (EN16931 for CII, EXTENDED for Factur-X) and
+	 * can be overridden with EINVOICING_XML_PROFILE, so the module can be switched to the
+	 * EXTENDED-CTC-FR profile of the French mandate without editing the code. An unknown value is
+	 * logged and ignored rather than aborting the generation.
+	 *
+	 * @return 	string 		Profile name, uppercased
+	 */
+	protected function getBuildXmlProfile()
+	{
+		$configured = getDolGlobalString('EINVOICING_XML_PROFILE');
+		if ($configured === '') {
+			return static::BUILD_XML_PROFILE;
+		}
+
+		$configured = strtoupper(trim($configured));
+		if (!in_array($configured, self::SUPPORTED_XML_PROFILES, true)) {
+			dol_syslog(get_class($this).'::getBuildXmlProfile unknown EINVOICING_XML_PROFILE "'.$configured.'", falling back to '.static::BUILD_XML_PROFILE, LOG_WARNING);
+			return static::BUILD_XML_PROFILE;
+		}
+
+		return $configured;
+	}
+
+	/**
 	 * Build CII XML from invoice data.
 	 *
 	 * @param array 		$invoiceData 	Header-level invoice data (generated by the buildinvoicelines.inc.php)
@@ -1734,6 +1799,12 @@ class CIIProtocol extends AbstractProtocol
 			$exDoc->appendChild($note);
 			$note->appendChild($doc->createElement('ram:Content', htmlspecialchars($invoiceData['documentNoteAAB'])));
 			$note->appendChild($doc->createElement('ram:SubjectCode', 'AAB'));
+		}
+		if (!empty($invoiceData['documentNoteTXD'])) {
+			$note = $doc->createElement('ram:IncludedNote');
+			$exDoc->appendChild($note);
+			$note->appendChild($doc->createElement('ram:Content', htmlspecialchars($invoiceData['documentNoteTXD'])));
+			$note->appendChild($doc->createElement('ram:SubjectCode', 'TXD'));
 		}
 
 
@@ -1895,7 +1966,7 @@ class CIIProtocol extends AbstractProtocol
 			$settlement->appendChild($comment);
 
 			$settlement->appendChild(
-				$this->buildTaxNode($doc, $rate, $vals, $invoiceData['invoiceCurrency']) 	// ApplicableTradeTax
+				$this->buildTaxNode($doc, $rate, $vals, $invoiceData['invoiceCurrency'], $invoiceData['vatDueDateTypeCode'] ?? '') 	// ApplicableTradeTax
 			);
 		}
 
@@ -2064,6 +2135,29 @@ class CIIProtocol extends AbstractProtocol
 		// Note that the $line['ExemptionReasonCode'] and $line['ExemptionReasonCode'] is added into the section ApplicableHeaderTradeSettlement
 		// that is a vat breakdown array and not inside each line.
 
+		// Billing period for the line (BG-26 / BT-134 / BT-135). Must be placed after ApplicableTradeTax
+		// and before SpecifiedTradeAllowanceCharge (discount below) per the CII D22B schema sequence.
+		if ($line['linePeriodStart'] !== null || $line['linePeriodEnd'] !== null) {
+			$period = $doc->createElement('ram:BillingSpecifiedPeriod');
+			$sett->appendChild($period);
+
+			if ($line['linePeriodStart'] !== null) {
+				$start = $doc->createElement('ram:StartDateTime');
+				$startStr = $doc->createElement('udt:DateTimeString', $line['linePeriodStart']->format('Ymd'));
+				$startStr->setAttribute('format', '102');
+				$start->appendChild($startStr);
+				$period->appendChild($start);
+			}
+
+			if ($line['linePeriodEnd'] !== null) {
+				$end = $doc->createElement('ram:EndDateTime');
+				$endStr = $doc->createElement('udt:DateTimeString', $line['linePeriodEnd']->format('Ymd'));
+				$endStr->setAttribute('format', '102');
+				$end->appendChild($endStr);
+				$period->appendChild($end);
+			}
+		}
+
 		if ($line['discountPercent']) {
 			$discount = [
 				'basis' => $line['netpriceamount'] * $line['billedquantity'],	// The base amount for the discount is the line net price * quantity.
@@ -2156,11 +2250,14 @@ class CIIProtocol extends AbstractProtocol
 		// ram:DefinedTradeContact is the wrapper for all contact sub-fields. Only create it when at
 		// least one sub-field is present, otherwise $contact stays null and appendChild() fatals
 		// (e.g. specimen seller with a phone but no contact person name).
-		if (!empty($data[$prefix . 'contactpersonname'])
+		// Skipped in minimal mode: the deliver-to party is a stripped-down copy of the buyer, and the
+		// CII syntax binding forbids a contact there (CII-SR-312), as it does a legal organization.
+		if (!$minimal
+			&& (!empty($data[$prefix . 'contactpersonname'])
 			|| !empty($data[$prefix . 'contactdepartmentname'])
 			|| !empty($data[$prefix . 'contactphoneno'])
 			|| !empty($data[$prefix . 'contactfaxno'])
-			|| !empty($data[$prefix . 'contactemailaddr'])) {
+			|| !empty($data[$prefix . 'contactemailaddr']))) {
 			$contact = $doc->createElement('ram:DefinedTradeContact');
 			$node->appendChild($contact);
 
@@ -2289,9 +2386,10 @@ class CIIProtocol extends AbstractProtocol
 	 * @param float|string      $rate 		Tax rate
 	 * @param array       		$vals 		Array containing tax values
 	 * @param string       		$currency 	Currency code
+	 * @param string       		$dueDateTypeCode 	BT-8, VAT point date code ('5', '29' or '72'), empty to omit it
 	 * @return \DOMElement
 	 */
-	private function buildTaxNode($doc, $rate, $vals, $currency)
+	private function buildTaxNode($doc, $rate, $vals, $currency, $dueDateTypeCode = '')
 	{
 		$tax = $doc->createElement('ram:ApplicableTradeTax');
 
@@ -2309,6 +2407,10 @@ class CIIProtocol extends AbstractProtocol
 
 		if ($vals['ExemptionReasonCode']) {
 			$tax->appendChild($doc->createElement('ram:ExemptionReasonCode', $vals['ExemptionReasonCode']));
+		}
+
+		if (!empty($dueDateTypeCode)) {		// BT-8, placed before the rate per the CII D22B sequence
+			$tax->appendChild($doc->createElement('ram:DueDateTypeCode', $dueDateTypeCode));
 		}
 
 		$floatrate = preg_replace('/\(.*\)/', '', (string) $rate);		// If $rate is 'x.x (CODE)', we change it into 'x.x'
@@ -2330,6 +2432,9 @@ class CIIProtocol extends AbstractProtocol
 	 * @param string|null       $reasonCode 	Code for the reason (optional, can be used instead of reason or together with reason)
 	 * @param string            $taxCategory 	Tax category code
 	 * @param float             $taxRate 		Tax rate applicable to this discount/charge
+	 * @param bool              $withCategoryTradeTax	Whether to emit ram:CategoryTradeTax. Mandatory on a document-level
+	 *                                                  allowance/charge (BT-95/BT-96, BT-102/BT-103), forbidden on a
+	 *                                                  line-level one (CII-SR-191)
 	 *
 	 * @return \DOMElement
 	 */
@@ -2342,7 +2447,8 @@ class CIIProtocol extends AbstractProtocol
 		$reason = null,
 		$reasonCode = null,
 		$taxCategory = 'S',
-		$taxRate = 20.0
+		$taxRate = 20.0,
+		$withCategoryTradeTax = true
 	) {
 		$node = $doc->createElement('ram:SpecifiedTradeAllowanceCharge');
 
@@ -2377,14 +2483,17 @@ class CIIProtocol extends AbstractProtocol
 			$node->appendChild($doc->createElement('ram:Reason', $reason));
 		}
 
-		// Tax (important Factur-X)
-		$taxNode = $doc->createElement('ram:CategoryTradeTax');
+		// Tax (important Factur-X). Document level only: on a line the VAT of the discount is already
+		// carried by the line's own ram:ApplicableTradeTax, and CII-SR-191 forbids it here.
+		if ($withCategoryTradeTax) {
+			$taxNode = $doc->createElement('ram:CategoryTradeTax');
 
-		$taxNode->appendChild($doc->createElement('ram:TypeCode', 'VAT'));
-		$taxNode->appendChild($doc->createElement('ram:CategoryCode', $taxCategory));
-		$taxNode->appendChild($doc->createElement('ram:RateApplicablePercent', number_format($taxRate, 2, '.', '')));
+			$taxNode->appendChild($doc->createElement('ram:TypeCode', 'VAT'));
+			$taxNode->appendChild($doc->createElement('ram:CategoryCode', $taxCategory));
+			$taxNode->appendChild($doc->createElement('ram:RateApplicablePercent', number_format($taxRate, 2, '.', '')));
 
-		$node->appendChild($taxNode);
+			$node->appendChild($taxNode);
+		}
 
 		return $node;
 	}
@@ -2410,7 +2519,8 @@ class CIIProtocol extends AbstractProtocol
 			$discount['reason'] ?? null,
 			$discount['code'] ?? null,
 			$discount['taxCategory'] ?? 'S',
-			$discount['taxRate'] ?? 20.0
+			$discount['taxRate'] ?? 20.0,
+			false			// No ram:CategoryTradeTax on a line-level allowance (CII-SR-191)
 		);
 
 		$lineTradeAgreement->appendChild($node);

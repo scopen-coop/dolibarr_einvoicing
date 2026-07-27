@@ -84,8 +84,25 @@ class CdarHandler
 	const STATUS_ACCEPTED = '1';
 	const STATUS_REJECTED = '8';
 	const STATUS_RECEIVED = '43';
+	const STATUS_IN_PROCESS = '45';
 	const STATUS_PAID = '47';
 	const STATUS_ACKNOWLEDGED = '48';
+	const STATUS_DEPOSITED = '10';
+
+	/**
+	 * Document status code (MDT-88) that goes with a lifecycle status (MDT-105), as read from the
+	 * XP Z12-012 annex B reference examples. The lifecycle statuses those examples do not cover
+	 * (refusal, dispute, suspension...) keep the historical "in process", which the platforms accept.
+	 */
+	const STATUS_CODE_PER_PROCESS_CONDITION = [
+		self::PROC_DEPOSITED           => self::STATUS_DEPOSITED,
+		self::PROC_RECEIVED            => self::STATUS_RECEIVED,
+		self::PROC_AVAILABLE           => self::STATUS_ACKNOWLEDGED,
+		self::PROC_TAKEN_OVER          => self::STATUS_IN_PROCESS,
+		self::PROC_APPROVED            => self::STATUS_ACCEPTED,
+		self::PROC_PAYMENT_TRANSMITTED => self::STATUS_PAID,
+		self::PROC_PAID                => self::STATUS_PAID,
+	];
 
 	// XML Namespaces
 	private $namespaces = [
@@ -238,17 +255,15 @@ class CdarHandler
 
 		/**
 		 * MDT-88
-		 * TODO: Map status codes from Dolibarr to CDAR status codes
-		 * 45 (In Process) = Prise en charge
+		 * TODO: the lifecycle statuses with no reference example still fall back on "in process":
 		 * 39 (on hold) = Suspendue
 		 * 37 (Complete) = Complétée
 		 * 50 (Rejected / Refused) = Refusée (by C4)
 		 * 49 (Conditionally accepted) = Approuvée Partiellement
-		 * 47 (Paid) = Paiement Transmis ET Encaissée
 		 * 46 (Under Query) = En litige
-		 * 1 (accepted) = Approuvée
 		 */
-		$StatusCodeCdar = '45';
+		// The keys of the map are numeric strings, which PHP stores as integer array keys
+		$StatusCodeCdar = CdarHandler::STATUS_CODE_PER_PROCESS_CONDITION[(int) $statusCode] ?? CdarHandler::STATUS_IN_PROCESS;
 
 		// Label for ProcessCondition (Label of status code) we get it from class einvoicing
 		dol_include_once('/einvoicing/class/providers/PDPProviderManager.class.php');
@@ -257,6 +272,21 @@ class CdarHandler
 		$ProcessCondition = str_replace(' ', '_', $ProcessCondition);
 		$ProcessCondition = preg_replace('/[^A-Za-z0-9_]/', '', $ProcessCondition); // Clean special chars
 
+		// Electronic address (MDT-73) of the CDAR recipient. Every status but the cash-in (212) is sent on a
+		// supplier invoice: we are the buyer and the CDAR goes back to the vendor, so it is addressed with
+		// the routing the module already resolves for that third party - the one recorded for it, its
+		// SIREN otherwise. Sending the SIREN blindly only works when the platform happens to know the
+		// vendor under that very address, and gets the message refused with "L'adresse electronique
+		// (MDT-73) est invalide" otherwise. getBuyerCommunicationURI() is called on the third party alone:
+		// the invoice-level routing override it also knows about is looked up among the customer invoices
+		// (element_type = 'facture'), which a supplier invoice must not read.
+		$RecipientURIID = $InvoiceIssuerGlobalID;
+		if ($statusCode != 212 && $object->thirdparty instanceof Societe) {
+			$vendorURIID = $einvoicing->getBuyerCommunicationURI($object->thirdparty);
+			if ($vendorURIID !== '') {	// Empty with EINVOICING_BLOCK_INVOICE_NO_ROUTING_ID and no routing: keep the SIREN, an empty MDT-73 is worse
+				$RecipientURIID = $vendorURIID;
+			}
+		}
 
 		$data = [
 			'GuidelineID' => 'urn.cpro.gouv.fr:1p0:CDV:invoice',
@@ -279,7 +309,7 @@ class CdarHandler
 					'GlobalID'     => $InvoiceIssuerGlobalID, // GlobalID of CDAR RECIPIENT
 					'SchemeID'     => CdarHandler::SCHEME_SIREN_0002,
 					'RoleCode'     => CdarHandler::ROLE_SE,
-					'URIID'        => $InvoiceIssuerGlobalID,
+					'URIID'        => $RecipientURIID,
 					'URISchemeID'  => CdarHandler::SCHEME_SIREN_0225
 				]
 			],
@@ -293,7 +323,8 @@ class CdarHandler
 					'IssuerAssignedID' => $IssuerAssignedID,
 					'StatusCode' => $StatusCodeCdar,
 					'TypeCode' => CdarHandler::DOC_INVOICE, // TODO: map DOC_INVOICE with $object type
-					'FormattedIssueDateTime' => date('YmdHis', $object->date),
+					// Every XP Z12-012 reference example dates the referenced invoice with a plain date
+					'FormattedIssueDateTime' => date('Ymd', $object->date),
 					'ProcessConditionCode' => $statusCode,
 					'ProcessCondition' => $ProcessCondition,
 
@@ -706,7 +737,7 @@ class CdarHandler
 
 		$formattedDateTime = $dom->createElement('ram:FormattedIssueDateTime');
 		$dateTimeStr = $dom->createElement('qdt:DateTimeString', $doc['FormattedIssueDateTime']);
-		$dateTimeStr->setAttribute('format', self::FORMAT_DATETIME);
+		$dateTimeStr->setAttribute('format', self::FORMAT_DATE);
 		$formattedDateTime->appendChild($dateTimeStr);
 		$ref->appendChild($formattedDateTime);
 
