@@ -46,13 +46,13 @@ abstract class AbstractProtocol
 	public $warnings = [];
 
 	/** @const string Invoice file extension (without the dot, example 'xml') */
-	protected const INVOICE_FILE_EXTENSION = self::INVOICE_FILE_EXTENSION;
+	protected const INVOICE_FILE_EXTENSION = ''; // Must be overridden by subclasses
 
 	/** @const string Generated invoice XML file name*/
-	protected const GENERATED_INVOICE_XML_FILE_NAME = self::GENERATED_INVOICE_XML_FILE_NAME;
+	protected const GENERATED_INVOICE_XML_FILE_NAME = ''; // Must be overridden by subclasses
 
 	/** @const string The profile used to generate XML */
-	protected const BUILD_XML_PROFILE = self::BUILD_XML_PROFILE;
+	protected const BUILD_XML_PROFILE = ''; // Must be overridden by subclasses
 
 	/**
 	 * @param DoliDB $db Db
@@ -116,6 +116,35 @@ abstract class AbstractProtocol
 	 * @return 	-1|array<string,string>							Path or content of the generated sample invoice.
 	 */
 	abstract public function generateSampleInvoice($einvoicing, $thirdpartySeller = null, $thirdpartyBuyer = null, $options = array());
+
+	/**
+	 * Parse the invoice header from raw file content.
+	 *
+	 * @param  string $rawContent Raw file content
+	 * @return array<string,float|string|array>
+	 */
+	abstract public function parseInvoiceHeader(string $rawContent);
+
+	/**
+	 * Parse all invoice line items from raw file content.
+	 *
+	 * @param  string $rawContent Raw file content
+	 * @return array<int,array<string,mixed>>
+	 */
+	abstract public function parseInvoiceLines(string $rawContent);
+
+	/**
+	 * Extract XML from an input file content (PDF, XML...) and return it
+	 * - if input is already an XML (CII, UBL), can directly return file content (no extraction needed : default behaviour)
+	 * - if input is a FactorX PDF, need to extract XML part and return only XML (override required)
+	 *
+	 * @param  string $fileContent Raw file content
+	 * @return string The extracted XML content
+	 */
+	public function extractXmlFromFileContent(string $fileContent)
+	{
+		return $fileContent;
+	}
 
 	/**
 	 * Remove attachment nodes to get a smaller XML

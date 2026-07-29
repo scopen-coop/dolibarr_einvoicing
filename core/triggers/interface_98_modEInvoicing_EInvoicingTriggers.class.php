@@ -18,13 +18,17 @@
  */
 
 /**
- * \file    core/triggers/interface_99_modEInvoicing_EInvoicingTriggers.class.php
+ * \file    core/triggers/interface_98_modEInvoicing_EInvoicingTriggers.class.php
  * \ingroup einvoicing
  * \brief   Triggers for EInvoicing module
  */
 
 require_once DOL_DOCUMENT_ROOT.'/core/triggers/dolibarrtriggers.class.php';
 dol_include_once('einvoicing/class/helpers/SupplierInvoiceHelper.class.php');
+// The classes below happen to be already loaded when the action comes from the module screens, but not
+// when a trigger fires from a context that never went through them: cron, CLI, REST API, bank import...
+dol_include_once('einvoicing/class/einvoicing.class.php');
+dol_include_once('einvoicing/class/providers/PDPProviderManager.class.php');
 
 
 /**
@@ -42,7 +46,7 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 		parent::__construct($db);
 		$this->family = "einvoicing";
 		$this->description = "EInvoicing triggers.";
-		$this->version = 'development';
+		$this->version = 'dolibarr';
 		$this->picto = 'einvoicing@einvoicing';
 	}
 
@@ -237,45 +241,30 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 			}
 		}
 
-		if ($action == 'BILL_PAYED') {
-			/** @var Facture $object */
-			'@phan-var-force Facture $object';
-			// Check if the invoice is transmitted to EInvoicing and confirm we have received the payment if yes.
+		// fr:212 (Encaissee) is reported per cash-in, not once when the invoice gets fully paid: the reform
+		// expects the date and the amount of EVERY payment, partial ones included, so a 2-instalment invoice
+		// owes 2 statuses. Hooking the payment creation (and not BILL_PAYED) also covers the invoices that
+		// stay partially paid forever, and skips the write-offs (abandon / bad debt) where nothing is cashed.
+		if ($action == 'PAYMENT_CUSTOMER_CREATE') {
+			/** @var Paiement $object */
+			'@phan-var-force Paiement $object';
 
 			if (!getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP')) {		// If sync Dolibarr to AP is on
-				// fr:212 (Encaissee) means the invoice was cashed in: report it whenever an actual payment was
-				// received. A normal full payment leaves close_code empty, so the previous test on close_code
-				// (BANKCHARGE/WITHHOLDINGTAX only) missed the common case. Keying on the received amount also
-				// avoids reporting "cashed in" for a write-off with no payment (abandon / bad debt), where
-				// BILL_PAYED still fires but nothing was received.
-				if ($object->getSommePaiement() > 0) {
-					// Test if invoice need EInvoicing
-					$einvoicing = new EInvoicing($this->db);
+				require_once DOL_DOCUMENT_ROOT . '/compta/facture/class/facture.class.php';
 
-					$needEinvoice = $einvoicing->needEInvoiceManagement($object);
-					if ($needEinvoice) {
-						$currentStatusDetails = $einvoicing->fetchLastknownInvoiceStatus($object->id, (string) $object->ref);
-
-						if ($currentStatusDetails['transmitted'] == 1) {	// If invoice already transmitted
-							$PDPManager = new PDPProviderManager($this->db);
-							$provider = $PDPManager->getProvider(getDolGlobalString('EINVOICING_PDP'));
-
-							$result = $provider->sendStatusMessage($object, 212); 		// Send status message
-
-							if ($result['res'] > 0) {
-								setEventMessage($langs->trans("ModuleEInvoicingName").' : '.$langs->trans('EInvStatus212Paid'), 'mesgs');
-							} else {
-								// Not escalated to $this->errors/return -1 on purpose: a negative return here
-								// would make Facture::setPaid() roll back the payment it just recorded (see
-								// compta/facture/class/facture.class.php) - a platform notification failure
-								// must never undo a real payment. dol_syslog is the only channel that reliably
-								// surfaces this outside an interactive session (cron, API, bank import, ...),
-								// since setEventMessage() only shows up on the next HTML page render.
-								dol_syslog(__METHOD__ . ' Failed to send paid status (212) to platform for invoice id=' . $object->id . ' : ' . $result['message'], LOG_ERR);
-								setEventMessage($langs->trans("ModuleEInvoicingName").' : '.$result['message'], 'errors');
-							}
-						}
+				foreach ($object->amounts as $facid => $amount) {
+					$amount = (float) $amount;
+					if ($amount <= 0) {		// Payment lines with no amount, or a refund line: nothing cashed in
+						continue;
 					}
+
+					$invoice = new Facture($this->db);
+					if ($invoice->fetch((int) $facid) <= 0) {
+						dol_syslog(__METHOD__ . ' Cannot load invoice id=' . $facid . ' of payment id=' . $object->id, LOG_ERR, 0, '_einvoicing');
+						continue;
+					}
+
+					$this->sendCashedInStatus($invoice, $amount, $langs);
 				}
 			}
 		}
@@ -284,7 +273,13 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 		if ($action == 'BILL_SUPPLIER_VALIDATE') {
 			/** @var FactureFournisseur $object */
 			'@phan-var-force FactureFournisseur $object';
-			if (getDolGlobalInt('EINVOICING_SUPPLIER_INVOICE_CHECK_CONSISTENCY_ON_VALIDATION') && SupplierInvoiceHelper::isEInvoice($object->id)) {
+			$duplicate = false;
+			if (getDolGlobalInt('EINVOICING_SUPPLIER_INVOICE_CHECK_CONSISTENCY_ON_VALIDATION') && SupplierInvoiceHelper::isEInvoice($object->id, false, $duplicate)) {
+				if ($duplicate) {
+					// Comparing against one of two conflicting e-invoicing documents would be meaningless
+					$this->errors[] = $langs->trans('EinvoicingDuplicateDocumentForSupplierInvoice', $object->id);
+					return -1;
+				}
 				// Ensure e-invoice and dol-invoice contains consistent data
 				$resComparison = SupplierInvoiceHelper::checkDolInvoiceAndEInvoiceConsistency($object);
 				if (!$resComparison['identical']) {
@@ -297,11 +292,51 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 			}
 		}
 
+		// fr:211 (Paiement transmis) is what we, as the buyer, tell the vendor once we have paid one of
+		// its invoices. Nothing in the reform makes it mandatory and it costs a platform flow, so it is
+		// sent only when EINVOICING_SEND_PAYMENT_SENT_STATUS is on, and only once per invoice: a payment
+		// deleted then recorded anew makes Dolibarr classify the invoice paid a second time.
+		if ($action == 'BILL_SUPPLIER_PAYED') {
+			/** @var FactureFournisseur $object */
+			'@phan-var-force FactureFournisseur $object';
+
+			if (getDolGlobalInt('EINVOICING_SEND_PAYMENT_SENT_STATUS') && !getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP')) {
+				$paidAmount = (float) $object->getSommePaiement();
+
+				// Nothing to tell on a write-off (nothing was paid), nor on an invoice that never came
+				// from the platform: the vendor would not know the status we are answering to.
+				if ($paidAmount > 0 && SupplierInvoiceHelper::isEInvoice($object->id)) {
+					$einvoicing = new EInvoicing($this->db);
+
+					if (!$einvoicing->hasSentStatusMessage($object->id, $object->element, EInvoicing::STATUS_PAYMENT_SENT)) {
+						$PDPManager = new PDPProviderManager($this->db);
+						$provider = $PDPManager->getProvider(getDolGlobalString('EINVOICING_PDP'));
+
+						$result = $provider->sendStatusMessage($object, EInvoicing::STATUS_PAYMENT_SENT, '', array('amount' => $paidAmount, 'date' => dol_now()));
+
+						if ($result['res'] > 0) {
+							setEventMessage($langs->trans("ModuleEInvoicingName").' : '.$langs->trans('EInvStatus211PaymentTransmitted'), 'mesgs');
+						} else {
+							// Never escalated to $this->errors / a negative return: that would roll back the
+							// payment Dolibarr just recorded, and a platform notification failure must not
+							// undo a real payment. dol_syslog is the only channel that reliably surfaces
+							// this outside an interactive session (cron, API, bank import, ...).
+							dol_syslog(__METHOD__ . ' Failed to send payment transmitted status (211) to platform for supplier invoice id=' . $object->id . ' : ' . $result['message'], LOG_ERR);
+							setEventMessage($langs->trans("ModuleEInvoicingName").' : '.$result['message'], 'errors');
+						}
+					}
+				}
+			}
+		}
+
 		if ($action == 'BILL_SUPPLIER_DELETE') {
 			/** @var FactureFournisseur $object */
 			'@phan-var-force FactureFournisseur $object';
-			if (SupplierInvoiceHelper::isEInvoice($object->id, true)) {
-				$this->errors[] = $langs->trans('EinvoicingCantDeleteASupplierInvoice');
+			$duplicate = false;
+			if (SupplierInvoiceHelper::isEInvoice($object->id, true, $duplicate)) {
+				$this->errors[] = $duplicate
+					? $langs->trans('EinvoicingDuplicateDocumentForSupplierInvoice', $object->id)
+					: $langs->trans('EinvoicingCantDeleteASupplierInvoice');
 				return -1;
 			}
 		}
@@ -312,12 +347,106 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 			 * @var Document $object
 			 */
 			'@phan-var-force Document $object';
-			if ($object->fk_element_type == 'invoice_supplier' && SupplierInvoiceHelper::isEInvoice($object->fk_element_id, true)) {
-				$this->errors[] = $langs->trans('EinvoicingCantDeleteADocumentLinkedToAnExistingSupplierInvoice', $object->id, $object->fk_element_id);
+			$duplicate = false;
+			if ($object->fk_element_type == 'invoice_supplier' && SupplierInvoiceHelper::isEInvoice($object->fk_element_id, true, $duplicate)) {
+				$this->errors[] = $duplicate
+					? $langs->trans('EinvoicingDuplicateDocumentForSupplierInvoice', $object->fk_element_id)
+					: $langs->trans('EinvoicingCantDeleteADocumentLinkedToAnExistingSupplierInvoice', $object->id, $object->fk_element_id);
 				return -1;
 			}
 		}
 
 		return 0;
+	}
+
+	/**
+	 * Report a cash-in (status 212 "Encaissee") of a customer invoice to the Approved Platform.
+	 *
+	 * Errors are never escalated to $this->errors / a negative return: that would roll back the payment
+	 * Dolibarr just recorded (Paiement::create() aborts on a trigger failure) and a platform notification
+	 * failure must never undo a real payment. dol_syslog is the only channel that reliably surfaces the
+	 * problem outside an interactive session (cron, API, bank import, ...), since setEventMessage() only
+	 * shows up on the next HTML page render.
+	 *
+	 * @param  Facture   $invoice Invoice that has been cashed in
+	 * @param  float     $amount  Amount cashed in (TTC) by this payment, reported as the MEN blocks of the CDAR
+	 * @param  Translate $langs   Translate object
+	 * @return void
+	 */
+	private function sendCashedInStatus($invoice, $amount, Translate $langs)
+	{
+		$einvoicing = new EInvoicing($this->db);
+
+		if (!$einvoicing->needEInvoiceManagement($invoice)) {
+			return;
+		}
+
+		if (!$this->needCashedInStatus($invoice)) {
+			return;
+		}
+
+		$currentStatusDetails = $einvoicing->fetchLastknownInvoiceStatus($invoice->id, (string) $invoice->ref);
+		if ($currentStatusDetails['transmitted'] != 1) {	// Nothing to report a payment on if the invoice never reached the platform
+			return;
+		}
+
+		$PDPManager = new PDPProviderManager($this->db);
+		$provider = $PDPManager->getProvider(getDolGlobalString('EINVOICING_PDP'));
+
+		$result = $provider->sendStatusMessage($invoice, 212, '', array('amount' => $amount));
+
+		if ($result['res'] > 0) {
+			setEventMessage($langs->trans("ModuleEInvoicingName").' : '.$langs->trans('EInvStatus212Paid'), 'mesgs');
+		} else {
+			dol_syslog(__METHOD__ . ' Failed to send paid status (212) to platform for invoice id=' . $invoice->id . ' : ' . $result['message'], LOG_ERR);
+			setEventMessage($langs->trans("ModuleEInvoicingName").' : '.$result['message'], 'errors');
+		}
+	}
+
+	/**
+	 * Tell whether a cash-in on this invoice has to be reported with the status 212 (Encaissee).
+	 *
+	 * The reform only requires the payment data for the operations whose VAT is due on collection, which is
+	 * exactly what the VAT exigibility scheme of the company says. Dolibarr already holds it, in the setup of
+	 * the Tax/VAT module (Home - Setup - Modules - Tax/VAT, "VAT mode"), so there is nothing to configure
+	 * here: TAX_MODE_SELL_PRODUCT and TAX_MODE_SELL_SERVICE are read directly. Both are always populated,
+	 * Conf::setValues() defaults them to 'invoice' and 'payment' when the setup page was never saved.
+	 *
+	 *   TAX_MODE 0, the French default   products on invoice, services on payment  -> due on a service line
+	 *   TAX_MODE 1, "d'apres les debits" everything on invoice                     -> never due
+	 *   TAX_MODE 2                       everything on payment                     -> always due
+	 *
+	 * @param  Facture $invoice Invoice that has been cashed in
+	 * @return bool             True if the status has to be sent
+	 */
+	private function needCashedInStatus($invoice)
+	{
+		// VAT on a down payment falls due when the down payment is collected, whatever the scheme
+		if ($invoice->type == Facture::TYPE_DEPOSIT) {
+			return true;
+		}
+
+		$productOnPayment = (getDolGlobalString('TAX_MODE_SELL_PRODUCT') == 'payment');
+		$serviceOnPayment = (getDolGlobalString('TAX_MODE_SELL_SERVICE') == 'payment');
+
+		if ($productOnPayment && $serviceOnPayment) {
+			return true;
+		}
+		if (!$productOnPayment && !$serviceOnPayment) {
+			return false;
+		}
+
+		// Mixed scheme: due as soon as the invoice carries one line of the kind taxed on collection
+		$typeOnPayment = $serviceOnPayment ? 1 : 0;		// Product::TYPE_SERVICE / TYPE_PRODUCT, without requiring the class here
+		if (empty($invoice->lines)) {
+			$invoice->fetch_lines();
+		}
+		foreach ($invoice->lines as $line) {
+			if ($line->product_type == $typeOnPayment) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 }
