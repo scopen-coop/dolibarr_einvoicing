@@ -31,7 +31,6 @@ dol_include_once('einvoicing/class/einvoicing.class.php');
 dol_include_once('einvoicing/lib/einvoicing.lib.php');
 require_once DOL_DOCUMENT_ROOT . '/core/lib/admin.lib.php';
 
-
 /**
  * Class to manage SuperPDP PDP provider integration.
  */
@@ -1314,7 +1313,7 @@ class SuperPDPProvider extends AbstractPDPProvider
 		} elseif ($result['unknown'] > 0) {
 			// Entries exist and are flagged active, but nothing in the payload dates them: stay
 			// non-conclusive (the caller keeps failing open) instead of showing the recipient as
-			// reachable, which is the one answer that lets a doomed transmission through.
+			// reachable, which is the one answer that let's a doomed transmission through.
 			$result['status'] = 'undetermined';
 			$result['reachable'] = -1;
 			$result['message'] = 'EInvoicingDirectoryNoLineStatus';

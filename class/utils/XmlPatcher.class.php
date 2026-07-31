@@ -20,22 +20,22 @@
 /**
  * \file    einvoicing/class/utils/XmlPatcher.class.php
  * \ingroup einvoicing
- * \brief   Extend ZugferdDocumentBuilder to handle specific needs of CTC-FR guideline
+ * \brief   Add tools to handle specific needs of CTC-FR guideline and profile EXTENDED.
  */
 
-
-use horstoeko\zugferd\ZugferdDocumentBuilder;
-
-require __DIR__ . "/../../vendor/autoload.php";
 
 /**
  * XmlPatcher
+ *
+ * This class must stay free of any composer import: CIIProtocol includes it, and the CII protocol
+ * works on an instance where the php prerequisites of the module were never installed. Patching is
+ * done with the native DOM extension only, and the horstoeko builder is received as a plain object
+ * from the caller (FacturXProtocol), which is the one loading vendor/autoload.php.
  */
 class XmlPatcher
 {
-
 	/**
-	 * @var ZugferdDocumentBuilder
+	 * @var Object			Can be ZugferdDocumentBuilder
 	 */
 	private $builder;
 
@@ -65,8 +65,8 @@ class XmlPatcher
 
 
 	/**
-	 * @param ZugferdDocumentBuilder|null   $builder          The horstoeko build used to generate invoice file
-	 * @param string|null                   $embeddedXml      The embedded XML content use to read invoice data
+	 * @param mixed   		$builder		The horstoeko build used to generate invoice file (can be ZugferdDocumentBuilder, ...)
+	 * @param string|null  	$embeddedXml	The embedded XML content use to read invoice data
 	 */
 	public function __construct($builder = null, $embeddedXml = null)
 	{
@@ -99,12 +99,13 @@ class XmlPatcher
 
 	/**
 	 * Build the patched XML string.
+	 * TODO Seemsnot used.
 	 *
 	 * @return string Full patched XML ready to be embedded into the PDF
 	 */
 	public function getPatchedXml(): string
 	{
-		$xmlpath = $this->builder->getContent();
+		$xmlpath = $this->builder->getContent();		// Defined if ->builder is ZugferdDocumentBuilder
 
 		return self::patchXmlString($xmlpath, $this->depositRefs);
 	}
@@ -115,7 +116,7 @@ class XmlPatcher
 	 *   - Replace GuidelineID with EXTENDED-CTC-FR URN
 	 *   - Inject AdditionalReferencedDocument on deposit lines
 	 *
-	 * @param string $xmlpath           Path to the raw XML produced by horstoeko/zugferd
+	 * @param string $xmlpath           Path to the raw XML (for example produced by horstoeko/zugferd)
 	 * @param array  $depositRefs       Array of deposit refs to inject: array of ['lineId', 'invoiceRef', 'invoiceDate']
 	 *
 	 * @return string Patched XML string
