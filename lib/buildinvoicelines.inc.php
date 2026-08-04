@@ -267,17 +267,26 @@ if (! ($object->project instanceof Project)) {
 
 $invoiceRefDocs = [];
 
-// Source invoice (credit note)
-if ($object->type == $object::TYPE_CREDIT_NOTE && !empty($object->fk_facture_source)) {
+// Source invoice (credit note, replacement invoice)
+// A replacement invoice (BT-3 = 384) references the invoice it corrects in the same BG-3 slot as a
+// credit note does, and BR-FR-CO-04 makes that reference mandatory for it, with a "fatal" flag: one
+// sent without it is refused by the access point, and a receiver has nothing to attach it to.
+$refDocTypeCode = '';
+if ($object->type == $object::TYPE_CREDIT_NOTE) {
+	$refDocTypeCode = '381';			// 381 = Credit note
+} elseif ($object->type == $object::TYPE_REPLACEMENT) {
+	$refDocTypeCode = '384';			// 384 = Corrected invoice
+}
+if ($refDocTypeCode !== '' && !empty($object->fk_facture_source)) {
 	$sourceFact = new Facture($this->db);
 	if ($sourceFact->fetch($object->fk_facture_source) > 0) {
 		$sourceFactDate = new DateTime(dol_print_date($sourceFact->date, 'dayrfc'));
 		$invoiceRefDocs[] = [
 			'ref' => $sourceFact->ref,
 			'date' => $sourceFactDate,
-			'type' => '381' 				// 381 = Credit note
+			'type' => $refDocTypeCode
 		];
-		dol_syslog(get_class($this) . '::generateXML Set source invoice reference ' . $sourceFact->ref . ' for credit note ' . $object->ref);
+		dol_syslog(get_class($this) . '::generateXML Set source invoice reference ' . $sourceFact->ref . ' for ' . $object->ref);
 	} else {
 		if ($object->id == 0) { // Specimen case.
 			$specimenRefDoc = $object->fk_facture_source ?? 'FA0000-SPECIMEN';
@@ -285,11 +294,11 @@ if ($object->type == $object::TYPE_CREDIT_NOTE && !empty($object->fk_facture_sou
 			$invoiceRefDocs[] = [
 				'ref' => $specimenRefDoc,
 				'date' => $sourceFactDate,
-				'type' => '381' 				// 381 = Credit note
+				'type' => $refDocTypeCode
 			];
-			dol_syslog(get_class($this) . '::generateXML Set source invoice reference ' . $specimenRefDoc . ' for credit note specimen ' . $object->ref);
+			dol_syslog(get_class($this) . '::generateXML Set source invoice reference ' . $specimenRefDoc . ' for specimen ' . $object->ref);
 		} else {
-			dol_syslog(get_class($this) . '::generateXML Cannot fetch source invoice id=' . $object->fk_facture_source . ' for credit note ' . $object->ref, LOG_WARNING);
+			dol_syslog(get_class($this) . '::generateXML Cannot fetch source invoice id=' . $object->fk_facture_source . ' for ' . $object->ref, LOG_WARNING);
 		}
 	}
 }
@@ -708,14 +717,11 @@ $deliveryDate = !empty($deliveryDateList)
 
 
 
-// VAT exigibility scheme of the seller, as set in the Tax/VAT module (Home - Setup - Modules - Tax/VAT,
-// "VAT mode"). "TVA d'après les débits" is TAX_MODE 1, which puts both sell modes on 'invoice'.
-// Conf::setValues() always populates the two constants, defaulting to the French standard scheme.
-$sellProductOnPayment = (getDolGlobalString('TAX_MODE_SELL_PRODUCT') == 'payment');
-$sellServiceOnPayment = (getDolGlobalString('TAX_MODE_SELL_SERVICE') == 'payment');
-$vatOnDebits = (!$sellProductOnPayment && !$sellServiceOnPayment);
-// Does this invoice carry at least one line whose VAT falls due on collection?
-$vatDueOnPayment = ($sellServiceOnPayment && $hasServiceLine) || ($sellProductOnPayment && $hasProductLine);
+// VAT exigibility scheme of the seller: the VAT mode of the Tax/VAT module setup, unless the seller
+// declared its regime explicitly with EINVOICING_VAT_POINT_DATE_CODE. It decides the VAT point date
+// code the document carries (BT-8) and the legal mention that goes with the debits option.
+$vatOnDebits      = einvoicingVatOnDebits();
+$vatPointDateCode = einvoicingVatPointDateCode($hasProductLine, $hasServiceLine, $object->type == $object::TYPE_DEPOSIT);
 
 // Filling $invoiceData (based on $invoiceTemplate)
 $invoiceData = [
@@ -747,17 +753,12 @@ $invoiceData = [
 	'documentNoteAAB'      => getDolGlobalString('EINVOICING_AAB') ?: $outputlangs->transnoentities('NoEarlyPaymentDiscount'),
 	// Legal mention that goes with the "TVA d'après les débits" option, mandatory on the invoices of a
 	// seller who took it. The structured form of the same information is the VAT point date code below.
-	// The scheme is read from the setup of the Tax/VAT module, which already holds it: TAX_MODE 1 sets both
-	// TAX_MODE_SELL_* to 'invoice'. Conf::setValues() always populates them.
 	'documentNoteTXD'      => $vatOnDebits ? $outputlangs->transnoentities('VATOnDebitsMention') : '',
 	'documentNotes'        => [],
 
 	// BT-8 (VAT point date code), which tells the buyer when the VAT falls due, hence from when it can be
-	// deducted. UNTDID 2475 restricted to 5 (invoice date), 29 (delivery date) and 72 (payment date) by
-	// BR-CL-06, and mutually exclusive with BT-7 (BR-CO-03). VAT on services falls due on collection,
-	// unless the seller opted for the "TVA d'après les débits" scheme, where it falls due on invoicing.
-	// Nothing is sent for a goods-only invoice: its due date is the delivery date the invoice already carries.
-	'vatDueDateTypeCode'   => $vatOnDebits ? '5' : ($vatDueOnPayment ? '72' : ''),
+	// deducted. See einvoicingVatPointDateCode() for the rule and what the French socle names.
+	'vatDueDateTypeCode'   => $vatPointDateCode,
 
 	// Seller part
 	'sellername'                => $mysoc->name,

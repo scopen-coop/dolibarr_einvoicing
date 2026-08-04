@@ -2,6 +2,39 @@
 
 ## 1.0.4
 
+FIX: A down payment invoice now declares in BT-8 that its VAT falls due on collection, whatever the
+VAT mode of the instance, which is already why its cash-in is reported to the platform with the status
+212. Dolibarr builds every down payment line as a goods line, so the document used to say nothing at
+all while its lifecycle said otherwise.
+
+NEW: The VAT regime the generated documents declare in BT-8 can now be set explicitly, in the module
+setup, for a seller whose regime the VAT mode of the Tax/VAT module cannot express. That mode still
+decides by default and nothing changes for an instance that leaves the setting alone. An explicit
+value applies to every document and drives the "VAT on debits" legal mention and the scope of the
+"Cashed in" (212) status with it. It is also the only way to declare the exigibility at the delivery
+(29), a value the automatic derivation never produces: it says the same thing as 5, and the public
+portal only expects 5 (BR-FR-MAP-29). The setting completes the VAT mode rather than duplicating it,
+unlike the option dropped earlier in this version (issue #419).
+
+FIX: The setup page no longer dies on a fatal error when the selected Access point cannot be
+instantiated - the case of a provider disabled after being selected, "SuperPDP via partner only" being
+the way it happens today, since that option disables every other entry including the one already
+recorded in EINVOICING_PDP. The page read the configuration of a provider it did not have, so it
+answered nothing at all and the setup could no longer be reached to select another one. It now says
+which Access point is unavailable and offers the ones that remain. The actions of the provider block
+(token, health check, sample invoice) are skipped in that state instead of being matched on an empty
+prefix.
+
+FIX: Two fields declared in the ->fields of an object had no property on the class, which the core
+notices for us: it reads $this->{$field} to build the INSERT, and the comment next to that line says
+a miss means "a bug into definition of ->fields or a missing declaration of property". Document
+declared response_for_debug in its fields only, so every document recorded logged "Undefined property:
+Document::$response_for_debug" on 18, where CommonObject has no magic getter (from 20 on the getter
+swallows it). Call is worse: its fields declare provider, its properties declared fk_provider - a
+column the table never had - so the provider name of every logged API call was written through a
+property PHP creates on the fly, which is deprecated since 8.2 and warns on all four versions.
+Both properties are now declared, and the stale fk_provider is gone.
+
 FIX: A synchronization no longer raises a PHP warning for every flow whose source invoice is not in
 this database. Such a flow is the ordinary case on a platform account shared with another system -
 the customer invoice behind it simply lives somewhere else - and syncFlow() notes it in a message
@@ -10,6 +43,16 @@ CommonObject has no magic getter to absorb the miss (18) that logged "Undefined 
 Document::$flowId" once per flow; from 20 on the getter swallows it. The message itself, which the
 caller discards today since the flow counts as synchronized, also lost the one identifier it exists
 to carry.
+
+FIX: The sample invoice no longer pins a discount rounding that no two Dolibarr versions agree on.
+It forced MAIN_APPLY_DISCOUNT_ON_UNIT_PRICE_THEN_ROUND_BEFORE_MULTIPLICATION_BY_QTY to 2 - round the
+discounted unit price, then multiply - but 18 and 20 do not implement that option and round the line
+total instead, 23 rounds the unit price up and 24 rounds it down, so its single line (5 x 100.05 less
+10%) came out at 450.23, 450.25 or 450.20 depending on the core. The specimen is now computed with the
+default convention, the one all four return, and the setting of the instance is restored afterwards
+instead of being left changed for the rest of the request. The reference fixtures are updated
+accordingly, and EInvoicingSamplesTest, which passed on only one of the four versions tested, now
+passes on all of them, 18.0.10 to 24.0.0.
 
 NEW: A "Mapped vendor references" screen (Billing > E-invoice synchronization) lists every vendor
 product reference recorded on the products, i.e. the mappings the import of a supplier invoice relies
