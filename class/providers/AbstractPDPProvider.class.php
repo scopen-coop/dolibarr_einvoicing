@@ -197,25 +197,27 @@ abstract class AbstractPDPProvider
 
 	/**
 	 * Check whether a recipient has an active reception address in the Approved Platforms
-	 * directory (annuaire des Plateformes Agreees) before attempting to send an e-invoice.
+	 * directory before attempting to send an e-invoice.
 	 *
 	 * A recipient that is absent from the directory, or present but without any active routing
 	 * line, cannot receive electronic invoices: sending would be rejected by the platform with
-	 * a routing error (lifecycle fr:213). Checking beforehand lets the caller warn the user with
+	 * a routing error (lifecycle fr:213). Checking beforehand let the caller warn the user with
 	 * a clear message instead of the opaque platform rejection.
 	 *
 	 * Providers that do not expose a directory lookup keep the default 'unsupported' status so
 	 * the feature degrades gracefully and never blocks them.
 	 *
 	 * @param 	string 	$idprof1 	Recipient professional id 1 (SIREN for France)
-	 * @return 	array{status:string,reachable:int,entries:int,active:int,identifier:string,message:string,httpcode:int}
-	 *								status: unsupported|error|absent|inactive|routable ;
+	 * @return 	array{status:string,reachable:int,entries:int,active:int,unknown:int,identifier:string,linestatus:string,platform:string,effectivedate:int,message:string,httpcode:int}
+	 *								status: unsupported|error|absent|inactive|undetermined|routable ;
 	 *								reachable: 1 routable, 0 not routable, -1 unknown ;
-	 *								identifier: first active electronic address found (if any).
+	 *								identifier: first active electronic address found (if any) ;
+	 *								linestatus/platform: directoryLineStatus and platformType of that address,
+	 *								reported to the user so a positive answer carries its provenance.
 	 */
 	public function checkRecipientDirectory($idprof1)
 	{
-		$result = array('status' => 'unsupported', 'reachable' => -1, 'entries' => 0, 'active' => 0, 'identifier' => '', 'message' => '', 'httpcode' => 0);
+		$result = array('status' => 'unsupported', 'reachable' => -1, 'entries' => 0, 'active' => 0, 'unknown' => 0, 'identifier' => '', 'linestatus' => '', 'platform' => '', 'effectivedate' => 0, 'message' => '', 'httpcode' => 0);
 
 		// The standardized route check uses the AFNOR Directory Service (XP Z12-013), so any conformant
 		// Approved Platform is supported. A provider that does not expose that base keeps the
@@ -232,7 +234,10 @@ abstract class AbstractPDPProvider
 			return $result;
 		}
 
-		// 1) Search the directory lines for a reception address declared for this SIREN.
+		// 1) Search the directory lines for a reception address declared for this SIREN. No 'fields' is
+		//    sent: the accepted values are limited to addressingIdentifier, siren, siret and
+		//    addressingSuffix, so asking for 'directoryLineStatus' is rejected (HTTP 400) even though
+		//    platforms do return it. Omitting the list is the only way to get the whole line.
 		$body = json_encode(array('filters' => array('siren' => array('op' => 'strict', 'value' => $siren))));
 		$response = $this->callApi('afnor-directory/v1/directory-line/search', 'POST', $body, array(), 'precheck_directory');
 		$result['httpcode'] = (int) (isset($response['status_code']) ? $response['status_code'] : 0);
@@ -251,18 +256,33 @@ abstract class AbstractPDPProvider
 
 		if ($result['entries'] > 0) {
 			// A directory line exists, but only an enabled one can actually receive: the annuaire also
-			// carries lines that are declared and not open yet ('Upcoming'), or closed. Counting every
-			// returned line as active would report 'routable' for a recipient the platform then refuses
-			// with a routing error (fr:213). A line that carries no status at all is left as trusted
-			// (the field is optional in the search answer), so the check keeps failing open.
+			// carries lines that are declared and not open yet ('Upcoming', i.e. bound to a platform with
+			// a future effective date), or closed ('Disabled'). Counting every returned line as active
+			// would report 'routable' for a recipient the platform then refuses with a routing error
+			// (fr:213). A line whose status is missing proves nothing either way: it is counted apart so
+			// the caller can say so, instead of being silently trusted and shown as reachable.
+			$firstunknown = '';
+			$firstblocked = array('', '');
 			foreach ($lines as $line) {
-				$linestatus = isset($line['directoryLineStatus']) ? (string) $line['directoryLineStatus'] : '';
-				if ($linestatus !== '' && strtolower($linestatus) != 'enabled') {
+				$linestatus = isset($line['directoryLineStatus']) ? trim((string) $line['directoryLineStatus']) : '';
+				if ($linestatus === '') {
+					$result['unknown']++;
+					if ($firstunknown === '' && !empty($line['addressingIdentifier'])) {
+						$firstunknown = (string) $line['addressingIdentifier'];
+					}
+					continue;
+				}
+				if (strtolower($linestatus) != 'enabled') {
+					if ($firstblocked[0] === '') {
+						$firstblocked = array($linestatus, isset($line['platformType']) ? (string) $line['platformType'] : '');
+					}
 					continue;
 				}
 				$result['active']++;
 				if ($result['identifier'] === '' && !empty($line['addressingIdentifier'])) {
 					$result['identifier'] = (string) $line['addressingIdentifier'];
+					$result['linestatus'] = $linestatus;
+					$result['platform'] = isset($line['platformType']) ? (string) $line['platformType'] : '';
 				}
 			}
 
@@ -270,10 +290,27 @@ abstract class AbstractPDPProvider
 				// The recipient has an enabled reception address on an Approved Platform.
 				$result['status'] = 'routable';
 				$result['reachable'] = 1;
+			} elseif ($result['unknown'] > 0) {
+				// Lines are declared but the platform did not report their status, and it cannot be asked
+				// for: 'directoryLineStatus' is not part of the field list the search accepts (XP Z12-013
+				// only allows addressingIdentifier, siren, siret and addressingSuffix there), it is only
+				// returned as a bonus by the platforms that choose to. Fetching the line on its own
+				// (GET directory-line/code:<addressingIdentifier>) does not help either: on a platform
+				// that omits the status in the search, that answer omits it too. So an enabled address
+				// and one that merely takes effect later are indistinguishable here: stay non-conclusive
+				// (the caller keeps failing open) rather than claim the recipient is reachable.
+				$result['status'] = 'undetermined';
+				$result['reachable'] = -1;
+				$result['identifier'] = $firstunknown;
+				$result['message'] = 'EInvoicingDirectoryNoLineStatus';
 			} else {
-				// Declared in the annuaire but no line able to receive yet.
+				// Declared in the annuaire but no line able to receive yet. The line status is reported so
+				// the user can tell a line waiting for its effective date ('Upcoming') from a closed one
+				// ('Disabled'); the search answer carries no effective date to display, only the status.
 				$result['status'] = 'inactive';
 				$result['reachable'] = 0;
+				$result['linestatus'] = $firstblocked[0];
+				$result['platform'] = $firstblocked[1];
 			}
 
 			return $result;
@@ -281,9 +318,15 @@ abstract class AbstractPDPProvider
 
 		// 2) No directory line: tell apart a legal unit known to the directory but not able to receive
 		//    yet (inactive) from a SIREN that is unknown to the directory (absent).
-		$consult = $this->callApi('afnor-directory/v1/siren/code-insee:' . urlencode($siren), 'GET', false, array(), 'precheck_directory');
+		//    The search form is used rather than the 'siren/code-insee:<siren>' consultation: both are
+		//    part of the same standardized service, but the consultation is not served by every Approved
+		//    Platform (one answers 404 on it while answering the search with the legal unit), so the
+		//    search is what keeps this second step meaningful everywhere. An unknown SIREN comes back
+		//    either as a 404 or as an empty result set depending on the platform, and both mean absent.
+		$consultbody = json_encode(array('filters' => array('siren' => array('op' => 'strict', 'value' => $siren))));
+		$consult = $this->callApi('afnor-directory/v1/siren/search', 'POST', $consultbody, array(), 'precheck_directory');
 		$consultcode = (int) (isset($consult['status_code']) ? $consult['status_code'] : 0);
-		if ($consultcode == 200 && !empty($consult['response']['siren'])) {
+		if ($consultcode == 200 && !empty($consult['response']['results'][0]['siren'])) {
 			$result['status'] = 'inactive';
 		} else {
 			$result['status'] = 'absent';
@@ -328,10 +371,10 @@ abstract class AbstractPDPProvider
 
 	/**
 	 * Try to get a flow data from its id and doc type, using API
-	 * @param $flowId 		The id of the flow
-	 * @param $docType 		The type of document we want to return
-	 * @param $callType		The type of call to use when calling API
 	 *
+	 * @param string	$flowId 		The id of the flow
+	 * @param string	$docType 		The type of document we want to return
+	 * @param string	$callType		The type of call to use when calling API
 	 * @return array{status_code:int,response:null|string|array<string,mixed>,errorCode?:string,errorMessage?:string,id?:int,call_id?:string}
 	 */
 	public function fetchFlowData($flowId, $docType, $callType = '')

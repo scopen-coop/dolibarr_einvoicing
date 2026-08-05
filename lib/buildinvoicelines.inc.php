@@ -51,6 +51,10 @@ if (!isset($outputlangs) || !($outputlangs instanceof Translate)) {
 }
 $newlang = '';
 
+// calcul_price_total(), used below to get the amounts of a line from the same place the invoice got
+// them. The protocols reach this file from several entry points, not all of which load the library.
+require_once DOL_DOCUMENT_ROOT.'/core/lib/price.lib.php';
+
 // Load EInvoicing class
 $einvoicing = new EInvoicing($db);
 
@@ -263,17 +267,26 @@ if (! ($object->project instanceof Project)) {
 
 $invoiceRefDocs = [];
 
-// Source invoice (credit note)
-if ($object->type == $object::TYPE_CREDIT_NOTE && !empty($object->fk_facture_source)) {
+// Source invoice (credit note, replacement invoice)
+// A replacement invoice (BT-3 = 384) references the invoice it corrects in the same BG-3 slot as a
+// credit note does, and BR-FR-CO-04 makes that reference mandatory for it, with a "fatal" flag: one
+// sent without it is refused by the access point, and a receiver has nothing to attach it to.
+$refDocTypeCode = '';
+if ($object->type == $object::TYPE_CREDIT_NOTE) {
+	$refDocTypeCode = '381';			// 381 = Credit note
+} elseif ($object->type == $object::TYPE_REPLACEMENT) {
+	$refDocTypeCode = '384';			// 384 = Corrected invoice
+}
+if ($refDocTypeCode !== '' && !empty($object->fk_facture_source)) {
 	$sourceFact = new Facture($this->db);
 	if ($sourceFact->fetch($object->fk_facture_source) > 0) {
 		$sourceFactDate = new DateTime(dol_print_date($sourceFact->date, 'dayrfc'));
 		$invoiceRefDocs[] = [
 			'ref' => $sourceFact->ref,
 			'date' => $sourceFactDate,
-			'type' => '381' 				// 381 = Credit note
+			'type' => $refDocTypeCode
 		];
-		dol_syslog(get_class($this) . '::generateXML Set source invoice reference ' . $sourceFact->ref . ' for credit note ' . $object->ref);
+		dol_syslog(get_class($this) . '::generateXML Set source invoice reference ' . $sourceFact->ref . ' for ' . $object->ref);
 	} else {
 		if ($object->id == 0) { // Specimen case.
 			$specimenRefDoc = $object->fk_facture_source ?? 'FA0000-SPECIMEN';
@@ -281,11 +294,11 @@ if ($object->type == $object::TYPE_CREDIT_NOTE && !empty($object->fk_facture_sou
 			$invoiceRefDocs[] = [
 				'ref' => $specimenRefDoc,
 				'date' => $sourceFactDate,
-				'type' => '381' 				// 381 = Credit note
+				'type' => $refDocTypeCode
 			];
-			dol_syslog(get_class($this) . '::generateXML Set source invoice reference ' . $specimenRefDoc . ' for credit note specimen ' . $object->ref);
+			dol_syslog(get_class($this) . '::generateXML Set source invoice reference ' . $specimenRefDoc . ' for specimen ' . $object->ref);
 		} else {
-			dol_syslog(get_class($this) . '::generateXML Cannot fetch source invoice id=' . $object->fk_facture_source . ' for credit note ' . $object->ref, LOG_WARNING);
+			dol_syslog(get_class($this) . '::generateXML Cannot fetch source invoice id=' . $object->fk_facture_source . ' for ' . $object->ref, LOG_WARNING);
 		}
 	}
 }
@@ -331,6 +344,18 @@ foreach ($object->lines as $line) {
 		$line->total_ttc    = abs($line->total_ttc);
 		$line->total_tva    = abs($line->total_tva);
 		$line->qty          = abs($line->qty);
+	}
+
+	// A line carrying recoverable non-collected VAT (TVA NPR) is issued exempt: getCategoryRate() reads
+	// info_bits and answers category E with the reason of article 295 of the CGI, and the rate the line
+	// states must go with it, since EN 16931 requires 0 there (BR-E-05) and no VAT amount (BR-E-09).
+	// Dolibarr already makes the total including tax of such a line equal to its net amount, so this is
+	// what makes the document claim the amount the invoice claims (issue #508).
+	if (!empty($line->info_bits) && ((int) $line->info_bits & 1)) {
+		$line->tva_tx = 0;
+		$line->vat_src_code = '';
+		$line->total_tva = 0;
+		$line->total_ttc = $line->total_ht;
 	}
 
 	// VAT category and exemption reason of the line
@@ -492,15 +517,21 @@ foreach ($object->lines as $line) {
 	}
 	$line_unit_price_with_discount = price2num($line_unit_price_with_discount, getDolGlobalString('MAIN_APPLY_DISCOUNT_ON_UNIT_PRICE_THEN_ROUND_BEFORE_MULTIPLICATION_BY_QTY', 'MU'));
 
-	// We need to recalculate the total using the Unit price rounded after discount percent (netpriceamount) and the quantity, and rounding all temporary calculations after to 2
-	// according to EN16931 rules. This is a not accurate rule but it is the rule to follow for e-invoice.
-	// This means we may get a different result than Dolibarr default calculation if:
-	// - There is a discount percent AND the option MAIN_APPLY_DISCOUNT_ON_UNIT_PRICE_THEN_ROUND_BEFORE_MULTIPLICATION_BY_QTY was not set or set to a value != MU
-	// or if
-	// - There is no discount percent but currency accuracy for total (MAIN_MAX_DECIMALS_UNIT) was not set to 2.
-	// TODO Use calculate_price() with a mode to round to 2 after each temporary calculation.
-	$line_total_ht = price2num((float) $line_unit_price_with_discount * $line->qty, 2);				// Need to round to 2 as defined by EN16931 rules after each calculation.
-	$line_total_tva = price2num((float) $line_unit_price_with_discount * $line->qty * ($line->tva_tx > 0 ? $line->tva_tx / 100 : 0), 2);
+	// Progress of the line, which only a situation invoice carries: calcul_price_total() applies it
+	// after the discount, exactly like the amounts of the invoice were computed.
+	$line_progress = ($object->type == $object::TYPE_SITUATION && $line->situation_percent) ? $line->situation_percent : 100;
+
+	// The amounts of the line are asked to the very function that computed the invoice
+	// (calcul_price_total(), the one update_price() calls), instead of being computed a second time
+	// here: the document has to state the amount the invoice states, and a second implementation
+	// misses the accuracies and the options of the instance, silently, by a few cents (issue #505).
+	// They are then rounded to the two decimals EN 16931 allows on an amount, which is a no-op on an
+	// instance keeping the default currency accuracy.
+	$localtaxes_array = array($line->localtax1_type, $line->localtax1_tx, $line->localtax2_type, $line->localtax2_tx);
+	$tmpcal = calcul_price_total($line->qty, $line->subprice, $line->remise_percent, $line->tva_tx, $line->localtax1_tx, $line->localtax2_tx, 0, 'HT', $line->info_bits, $line->product_type, $mysoc, $localtaxes_array, $line_progress);
+
+	$line_total_ht = price2num((float) $tmpcal[0], 2);
+	$line_total_tva = price2num((float) $tmpcal[1], 2);
 	$line_total_ttc = price2num((float) $line_total_ht + (float) $line_total_tva, 2);
 
 	// Uncomment for test using the most accurate possible calculation (but not following the e-invoice rule to round to 2 digit at each step of calculation)
@@ -686,14 +717,11 @@ $deliveryDate = !empty($deliveryDateList)
 
 
 
-// VAT exigibility scheme of the seller, as set in the Tax/VAT module (Home - Setup - Modules - Tax/VAT,
-// "VAT mode"). "TVA d'après les débits" is TAX_MODE 1, which puts both sell modes on 'invoice'.
-// Conf::setValues() always populates the two constants, defaulting to the French standard scheme.
-$sellProductOnPayment = (getDolGlobalString('TAX_MODE_SELL_PRODUCT') == 'payment');
-$sellServiceOnPayment = (getDolGlobalString('TAX_MODE_SELL_SERVICE') == 'payment');
-$vatOnDebits = (!$sellProductOnPayment && !$sellServiceOnPayment);
-// Does this invoice carry at least one line whose VAT falls due on collection?
-$vatDueOnPayment = ($sellServiceOnPayment && $hasServiceLine) || ($sellProductOnPayment && $hasProductLine);
+// VAT exigibility scheme of the seller: the VAT mode of the Tax/VAT module setup, unless the seller
+// declared its regime explicitly with EINVOICING_VAT_POINT_DATE_CODE. It decides the VAT point date
+// code the document carries (BT-8) and the legal mention that goes with the debits option.
+$vatOnDebits      = einvoicingVatOnDebits();
+$vatPointDateCode = einvoicingVatPointDateCode($hasProductLine, $hasServiceLine, $object->type == $object::TYPE_DEPOSIT);
 
 // Filling $invoiceData (based on $invoiceTemplate)
 $invoiceData = [
@@ -725,17 +753,12 @@ $invoiceData = [
 	'documentNoteAAB'      => getDolGlobalString('EINVOICING_AAB') ?: $outputlangs->transnoentities('NoEarlyPaymentDiscount'),
 	// Legal mention that goes with the "TVA d'après les débits" option, mandatory on the invoices of a
 	// seller who took it. The structured form of the same information is the VAT point date code below.
-	// The scheme is read from the setup of the Tax/VAT module, which already holds it: TAX_MODE 1 sets both
-	// TAX_MODE_SELL_* to 'invoice'. Conf::setValues() always populates them.
 	'documentNoteTXD'      => $vatOnDebits ? $outputlangs->transnoentities('VATOnDebitsMention') : '',
 	'documentNotes'        => [],
 
 	// BT-8 (VAT point date code), which tells the buyer when the VAT falls due, hence from when it can be
-	// deducted. UNTDID 2475 restricted to 5 (invoice date), 29 (delivery date) and 72 (payment date) by
-	// BR-CL-06, and mutually exclusive with BT-7 (BR-CO-03). VAT on services falls due on collection,
-	// unless the seller opted for the "TVA d'après les débits" scheme, where it falls due on invoicing.
-	// Nothing is sent for a goods-only invoice: its due date is the delivery date the invoice already carries.
-	'vatDueDateTypeCode'   => $vatOnDebits ? '5' : ($vatDueOnPayment ? '72' : ''),
+	// deducted. See einvoicingVatPointDateCode() for the rule and what the French socle names.
+	'vatDueDateTypeCode'   => $vatPointDateCode,
 
 	// Seller part
 	'sellername'                => $mysoc->name,

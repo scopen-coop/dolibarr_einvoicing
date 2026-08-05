@@ -1,5 +1,133 @@
 # CHANGELOG MODULE EINVOICING FOR [DOLIBARR ERP CRM](https://www.dolibarr.org)
 
+## 1.0.4
+
+FIX: A down payment invoice now declares in BT-8 that its VAT falls due on collection, whatever the
+VAT mode of the instance, which is already why its cash-in is reported to the platform with the status
+212. Dolibarr builds every down payment line as a goods line, so the document used to say nothing at
+all while its lifecycle said otherwise.
+
+NEW: The VAT regime the generated documents declare in BT-8 can now be set explicitly, in the module
+setup, for a seller whose regime the VAT mode of the Tax/VAT module cannot express. That mode still
+decides by default and nothing changes for an instance that leaves the setting alone. An explicit
+value applies to every document and drives the "VAT on debits" legal mention and the scope of the
+"Cashed in" (212) status with it. It is also the only way to declare the exigibility at the delivery
+(29), a value the automatic derivation never produces: it says the same thing as 5, and the public
+portal only expects 5 (BR-FR-MAP-29). The setting completes the VAT mode rather than duplicating it,
+unlike the option dropped earlier in this version (issue #419).
+
+FIX: The setup page no longer dies on a fatal error when the selected Access point cannot be
+instantiated - the case of a provider disabled after being selected, "SuperPDP via partner only" being
+the way it happens today, since that option disables every other entry including the one already
+recorded in EINVOICING_PDP. The page read the configuration of a provider it did not have, so it
+answered nothing at all and the setup could no longer be reached to select another one. It now says
+which Access point is unavailable and offers the ones that remain. The actions of the provider block
+(token, health check, sample invoice) are skipped in that state instead of being matched on an empty
+prefix.
+
+FIX: Two fields declared in the ->fields of an object had no property on the class, which the core
+notices for us: it reads $this->{$field} to build the INSERT, and the comment next to that line says
+a miss means "a bug into definition of ->fields or a missing declaration of property". Document
+declared response_for_debug in its fields only, so every document recorded logged "Undefined property:
+Document::$response_for_debug" on 18, where CommonObject has no magic getter (from 20 on the getter
+swallows it). Call is worse: its fields declare provider, its properties declared fk_provider - a
+column the table never had - so the provider name of every logged API call was written through a
+property PHP creates on the fly, which is deprecated since 8.2 and warns on all four versions.
+Both properties are now declared, and the stale fk_provider is gone.
+
+FIX: A synchronization no longer raises a PHP warning for every flow whose source invoice is not in
+this database. Such a flow is the ordinary case on a platform account shared with another system -
+the customer invoice behind it simply lives somewhere else - and syncFlow() notes it in a message
+built from $document->flowId, while the document object carries flow_id. On a Dolibarr whose
+CommonObject has no magic getter to absorb the miss (18) that logged "Undefined property:
+Document::$flowId" once per flow; from 20 on the getter swallows it. The message itself, which the
+caller discards today since the flow counts as synchronized, also lost the one identifier it exists
+to carry.
+
+FIX: The sample invoice no longer pins a discount rounding that no two Dolibarr versions agree on.
+It forced MAIN_APPLY_DISCOUNT_ON_UNIT_PRICE_THEN_ROUND_BEFORE_MULTIPLICATION_BY_QTY to 2 - round the
+discounted unit price, then multiply - but 18 and 20 do not implement that option and round the line
+total instead, 23 rounds the unit price up and 24 rounds it down, so its single line (5 x 100.05 less
+10%) came out at 450.23, 450.25 or 450.20 depending on the core. The specimen is now computed with the
+default convention, the one all four return, and the setting of the instance is restored afterwards
+instead of being left changed for the rest of the request. The reference fixtures are updated
+accordingly, and EInvoicingSamplesTest, which passed on only one of the four versions tested, now
+passes on all of them, 18.0.10 to 24.0.0.
+
+NEW: A "Mapped vendor references" screen (Billing > E-invoice synchronization) lists every vendor
+product reference recorded on the products, i.e. the mappings the import of a supplier invoice relies
+on to find the product of a line. Until now they could only be read product by product, in the
+"Supplier prices" tab of each one. A reference can be reassigned to another product or dropped
+directly from the list.
+
+FIX: The product picker of the screen mapping the products of an e-invoice no longer filters on the
+sale status. A product bought from a vendor only needs to be flagged "to buy", and a product created by
+a previous import never is on sale, so that screen offered an empty list of products.
+
+FIX: The error raised when a "Standard rated" line has no seller VAT number no longer names the
+customer. The test is on the seller (BR-S-02 requires the Seller VAT identifier, BT-31), but the
+message read "The VAT number of the thirdparty <customer> is mandatory", so the operator went looking
+for the missing number on the customer record while it was missing from their own company.
+  
+FIX: The documents generated on the MINIMUM and BASIC profiles now validate against their own Factur-X
+schema, which neither did. BASIC was treated as a full EN 16931 document, so it carried the party
+contacts (BG-6 / BG-9), the payment means label (BT-82), the account holder (BT-85) and the BIC (BT-86),
+none of which its schema declares - it declares the invoice lines, which is what set it apart from
+MINIMUM and BASIC WL, but not those. MINIMUM is not a reduced EN 16931 at all but a much smaller
+document: no note, no identifier on the parties, no trading name, no electronic address, an address
+reduced to its country, an empty delivery group, and a settlement holding only the currency and four
+amounts. It is now emitted as its schema declares it. The other profiles are untouched.
+
+FIX: A document generated as CII now carries the buyer reference (BT-10), the project reference (BT-11)
+and the contract reference (BT-12), which only the Factur-X path was writing. The three were read from
+the invoice, handed to the generator and silently dropped, so the same invoice produced a different
+document depending on the protocol - and the CII one lost the "service exécutant" a public buyer needs
+to route it. Each is emitted only on the profiles whose schema declares it: BT-10 everywhere, BT-12 from
+BASIC WL up, BT-11 from EN16931 up.
+
+FIX: A lifecycle message sent to a vendor with no routing recorded no longer falls straight back on its
+SIREN, which the platform accepts only when the vendor happens to be registered under it. The status is a
+reply, so it now looks for the address the vendor exchanges under, in order: the routing recorded in
+Dolibarr, then the electronic address (BT-34) carried by the e-invoice it sent us, then the address the
+platform directory declares for its SIREN, and only then the SIREN itself, saying in the log which one it
+settled on.
+
+FIX: Regenerating the document of an invoice already transmitted no longer sends it to the platform a
+second time. Automatic transmission on generation stopped at the sync status, which generateInvoice()
+resets to "generated" every time it runs, so from the second regeneration on the invoice looked as if it
+had never been sent. It was, and the platform, which registers a flow under the invoice reference,
+answered the duplicate with an HTTP 400 and no flow: an error raised to the operator on an invoice that
+was in fact transmitted and, when the first submission was still awaiting its outcome, a second useless
+call for every regeneration. The transmission now reads the flow identifier the platform assigned on the
+first submission, which nothing clears, exactly like the manual send button already did - and it honours
+the same EINVOICING_ALLOW_RESEND_TRANSMITTED opt-out.
+
+FIX: A line carrying recoverable non-collected VAT ("TVA non perçue récupérable", the overseas
+departments scheme of article 295 of the CGI) no longer makes the document claim a VAT the invoice does
+not charge. Dolibarr makes the total including tax of such a line equal to its net amount, where the
+module added the VAT on top, so the document asked the buyer for the whole rate more than the invoice.
+EN 16931 offers no way to declare a VAT that is not claimed - the total with VAT is the net total plus
+the VAT total (BR-CO-15) - so the line is now issued exempt (category E, rate 0, no VAT amount) with the
+reason code the standard reserves for that article, VATEX-FR-CGI295 (issue #508).
+
+NEW: The option that requires the recipient to be reachable before transmission now offers a third
+choice, which blocks the doubt as well: the directory (annuaire) answered for the recipient but did
+not report the status of its reception address. That status cannot be asked for - the directory
+search only accepts the address identifier, SIREN, SIRET and address suffix - so on a platform that
+leaves it out, an address that is open and one that only takes effect later are indistinguishable,
+and the invoice used to go out and possibly come back rejected with a routing error (fr:213).
+EINVOICING_REQUIRE_ROUTABLE_RECIPIENT, formerly a yes/no, now takes those three values, the first two
+keeping their meaning: an instance that already required reachability is unchanged.
+
+FIX: The amounts of a line are now asked to the core function that computed the invoice
+(calcul_price_total()) instead of being computed a second time in the module. The second
+implementation rounded the unit price after discount in every case, where the core only rounds it when
+the instance asks for it, so a discounted line could state a few cents less than the invoice it stands
+for - and an instance running a Dolibarr that does not know that option diverged by more, the module
+honouring a setting its core ignores. Nothing reported it: the document stayed internally consistent
+and the platform accepted it (issue #505).
+
+
 ## 1.0.3
 
 FIX: The totals of the generated document now follow the rounding convention of the instance. Dolibarr
@@ -116,6 +244,16 @@ supplier invoice received through the platform has been paid, as soon as Dolibar
 It carries the amount paid and its date, and is sent once per invoice. Optional status of the reform, so
 it is off by default and enabled with EINVOICING_SEND_PAYMENT_SENT_STATUS. It can also be sent by hand
 from the supplier invoice card, where it was missing from the list of sendable statuses.
+
+NEW: The local check run at generation time now also verifies that the generated document claims the
+amount the invoice claims, and says so when it does not. No rule of the standard can catch that: the
+rules relate the amounts of the document to each other, so a document wrong by a cent is as consistent
+as a correct one and the platform accepts it without a word. The remaining known cause is a currency
+accuracy for totals (MAIN_MAX_DECIMALS_TOT) other than 2, which puts a third decimal on the invoice
+where EN 16931 allows two on every amount, the rounding amount (BT-114) included: no computation can
+make the two equal, so the operator is told rather than left with a document quietly claiming something
+else. It follows EINVOICING_BR_CHECK like the other checks, so it warns by default and aborts on an
+instance set to "blocking" (issue #506).
 
 ## 1.0.0
 

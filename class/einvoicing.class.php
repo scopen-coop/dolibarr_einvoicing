@@ -770,27 +770,31 @@ class EInvoicing
 
 		// Error message if we failed to found the einvoiceid
 		if (empty($einvoiceid)) {
-			if (empty($mysoc->idprof1)) {
-				$baseErrors[] = $langs->trans("FxCheckErrorIDPROF1");
-			} else {
-				if ($mysoc->country_code == 'FR') {
-					// Get seller Einvoice ID
-					$provider = getDolGlobalString('EINVOICING_PDP');
-					//$providershort = preg_replace('/ViaPartner/', '', $provider);	// If provider is XXX or XXXViaPartner it must be saved as XXX so if we change method, data still match the situation.
-
-					$uriConf = 'EINVOICING_' . strtoupper($provider) . '_ROUTING_ID';
-					$einvoiceid = getDolGlobalString($uriConf);
-
-					//EINVOICING_LIVE
-					if (!preg_match('/^' . preg_replace('/\s+/', '', $mysoc->idprof1) . '/', $this->removeSpaces($einvoiceid))) {
-						//if (!empty($provider)) {
-							$baseWarnings[] = $langs->trans("FxCheckErrorRoutingIDFR", $einvoiceid);	// Your company profid must match the routing ID
-						//}
-					} else {
-						$baseErrors[] = $langs->trans("FxCheckErrorRoutingID");	// Your company does not have a valid prof id
-					}
+			$provider = getDolGlobalString('EINVOICING_PDP');
+			//$providershort = preg_replace('/ViaPartner/', '', $provider);	// If provider is XXX or XXXViaPartner it must be saved as XXX so if we change method, data still match the situation.
+			if (!empty($provider) && $provider !== '-1') {
+				if (empty($mysoc->idprof1)) {
+					$baseErrors[] = $langs->trans("FxCheckErrorIDPROF1");
 				} else {
-					$baseErrors[] = $langs->trans("FxCheckErrorRoutingID");
+					if ($mysoc->country_code == 'FR') {
+						// Get seller Einvoice ID
+						$provider = getDolGlobalString('EINVOICING_PDP');
+						//$providershort = preg_replace('/ViaPartner/', '', $provider);	// If provider is XXX or XXXViaPartner it must be saved as XXX so if we change method, data still match the situation.
+
+						$uriConf = 'EINVOICING_' . strtoupper($provider) . '_ROUTING_ID';
+						$einvoiceid = getDolGlobalString($uriConf);
+
+						//EINVOICING_LIVE
+						if (!preg_match('/^' . preg_replace('/\s+/', '', $mysoc->idprof1) . '/', $this->removeSpaces($einvoiceid))) {
+							//if (!empty($provider)) {
+								$baseWarnings[] = $langs->trans("FxCheckErrorRoutingIDFR", $einvoiceid);	// Your company profid must match the routing ID
+							//}
+						} else {
+							$baseErrors[] = $langs->trans("FxCheckErrorRoutingID");	// Your company does not have a valid prof id
+						}
+					} else {
+						$baseErrors[] = $langs->trans("FxCheckErrorRoutingID");
+					}
 				}
 			}
 		}
@@ -2196,10 +2200,12 @@ class EInvoicing
 	 * Only enforced when EINVOICING_REQUIRE_ROUTABLE_RECIPIENT is on (off by default, opt-in). A recipient
 	 * that is absent from the directory, or present without an active routing line, would be rejected by the
 	 * platform with a routing error (fr:213): blocking generation/sending avoids reaching that error state.
+	 * That option has a second, stricter, value (2) that also blocks a non-conclusive directory answer.
 	 *
 	 * Fails open (ok=1) whenever the check cannot be trusted, so it never blocks unexpectedly: option off,
-	 * provider without a directory lookup (status unsupported), directory call error, or a recipient with no
-	 * SIREN (handled by the standard required-information checks).
+	 * provider without a directory lookup (status unsupported), directory call error, a directory answer that
+	 * does not report the line status (status undetermined, unless the option is set to its strict value), or
+	 * a recipient with no SIREN (handled by the standard required-information checks).
 	 *
 	 * @param 	Facture 	$object 	Invoice
 	 * @return 	array{ok:int,status:string,message:string}	ok=0 only when the recipient is confirmed not routable.
@@ -2210,7 +2216,8 @@ class EInvoicing
 
 		$res = array('ok' => 1, 'status' => '', 'message' => '');
 
-		if (!getDolGlobalInt('EINVOICING_REQUIRE_ROUTABLE_RECIPIENT')) {
+		$require = getDolGlobalInt('EINVOICING_REQUIRE_ROUTABLE_RECIPIENT');
+		if (!$require) {
 			return $res;	// opt-in, off by default
 		}
 
@@ -2237,8 +2244,16 @@ class EInvoicing
 		} elseif ($res['status'] === 'inactive') {
 			$res['ok'] = 0;
 			$res['message'] = $langs->trans('EInvoicingDirectoryInactive', $siren);
+		} elseif ($res['status'] === 'undetermined' && $require >= 2) {
+			// Strict value of the option: the directory answered for this recipient but did not report the
+			// status of its reception address, and that status cannot be requested, so an open address and
+			// one that only takes effect later are indistinguishable. Transmitting may come back as a
+			// routing error (fr:213). Whoever prefers that risk over a blocked invoice stays on value 1.
+			$res['ok'] = 0;
+			$res['message'] = $langs->trans('EInvoicingDirectoryUndetermined', $siren);
 		}
-		// routable / error / unsupported => ok stays 1 (fail-open)
+		// routable / error / unsupported => ok stays 1 (fail-open), and undetermined too unless the
+		// option is set to its strict value.
 
 		return $res;
 	}
@@ -3133,6 +3148,16 @@ class EInvoicing
 		$conf->global->EINVOICING_PDP = 'SPECIMEN';
 		$conf->global->EINVOICING_SPECIMEN_ROUTING_ID = $seller->idprof2;
 
+		// Same reason for the VAT exigibility scheme, which decides the VAT point date code (BT-8) the
+		// specimen declares: pin the French standard scheme and the absence of a declared regime, so
+		// the fixtures do not depend on the VAT mode of whoever generates them.
+		$savTaxModeSellProduct = getDolGlobalString('TAX_MODE_SELL_PRODUCT');
+		$savTaxModeSellService = getDolGlobalString('TAX_MODE_SELL_SERVICE');
+		$savVatPointDateCode = getDolGlobalString('EINVOICING_VAT_POINT_DATE_CODE');
+		$conf->global->TAX_MODE_SELL_PRODUCT = 'invoice';
+		$conf->global->TAX_MODE_SELL_SERVICE = 'payment';
+		$conf->global->EINVOICING_VAT_POINT_DATE_CODE = 'auto';
+
 		// Same reason for the language: CommonProtocol::generateSampleInvoice() builds the specimen
 		// with the ambient $langs, so the free text it carries (BT-20 payment terms, BT-22 notes,
 		// line descriptions) follows whatever language the instance runs in. The reference fixtures
@@ -3169,6 +3194,9 @@ class EInvoicing
 		} finally {
 			$conf->global->EINVOICING_PDP = $savEinvoicingPdp;
 			$conf->global->EINVOICING_SPECIMEN_ROUTING_ID = $savEinvoicingRoutingId;
+			$conf->global->TAX_MODE_SELL_PRODUCT = $savTaxModeSellProduct;
+			$conf->global->TAX_MODE_SELL_SERVICE = $savTaxModeSellService;
+			$conf->global->EINVOICING_VAT_POINT_DATE_CODE = $savVatPointDateCode;
 			$langs = $savLangs;
 		}
 
