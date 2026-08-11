@@ -2,6 +2,58 @@
 
 ## 1.0.4
 
+NEW: Validating a supplier invoice received through the platform now answers its vendor with the
+"Approved" (205) status, instead of waiting for someone to remember the button on the invoice card.
+Validating a received invoice is the act of accepting it - it leaves the draft state to enter the accounts
+and become payable - and 205 is the answer the buyer owes on an invoice it accepts; a vendor left without
+one cannot tell an accepted invoice from a forgotten one. It is sent once per invoice, never on an invoice
+already answered with "Approved" or "Refused", and never on an invoice that did not come from the platform.
+A failure to send is reported and logged but never undoes the validation, and the status can still be sent
+by hand afterwards. Set EINVOICING_DISABLE_SEND_APPROVED_ON_VALIDATION, in the module setup, on an instance
+where validating an invoice does not mean approving it: nothing is sent automatically then and the manual
+button is unchanged.
+
+FIX: The generated documents now declare the period the invoice covers (BG-14, BT-73 and BT-74), which
+neither the CII nor the Factur-X path ever wrote. Dolibarr holds a period on the line and not on the
+invoice, so the header period is the one covering every line: the earliest start date and the latest end
+date of the lines that carry one. The line periods (BT-134/BT-135) are unchanged and still emitted; this
+adds the header the receiving software mostly reads, since a majority of tools only handle a period at
+invoice level. An invoice whose lines carry no period declares none, one side alone is enough
+(BR-CO-19 asks for the start date or the end date), and a set of lines that would derive a period
+starting after it ends - one line open from March next to another closed in January - declares no header
+period at all rather than a pair BR-29 refuses, which would have the whole document rejected for a field
+nobody filled in (issue #572).
+
+FIX: The module works on Dolibarr 17 again, the version its own descriptor declares as the minimum it
+supports. Two things stood in the way and neither of them failed quietly. Installing it died on a PHP
+TypeError: init() passed an empty array() where ExtraFields::update() expects a parameter string, and
+the branch that tolerates an empty array was only added to the core in 18, so activateModule() never
+completed. Generating a document died on "Call to undefined function dolChmod()", that helper having
+arrived in the core in 18 as well, while both writers call it on the XML they have just produced. The
+first is passed as '' now, which stores the same thing everywhere, and the second is supplied by a
+compat file alongside the two the module already ships for that version.
+
+FIX: On Dolibarr 23, a failed e-invoice generation was reported as an error where the core was able to
+carry it as a warning, so validating an invoice showed a red message for something that does not stop
+the validation. The module kept everything as an error below 24, but the chain a hook needs to report
+a warning - HookManager collecting the warnings of the hook instance, the document generator copying
+them, and commonGenerateDocument() copying them onto the object - is whole in 23 and absent in 22. The
+bound is 23 now. Nothing changes on 22 and below, where the warning would be reported nowhere, nor on
+24 and above.
+
+FIX: The compatibility files the module ships for the older cores are loaded from a path relative to
+the file that needs them, instead of being looked up through dol_buildpath(). A lookup that does not
+resolve - a deployment that does not sit where the module expects, which is what a container install
+can produce - only wrote a line in the log and returned false, so the polyfill was silently absent and
+the next call to it was a fatal "Call to undefined function isValidSiren" (issue #565).
+
+FIX: A line billed over a period that has only a start date, or only an end date, now carries that
+period in the Factur-X document as it already did in the CII one. The Factur-X path asked for both
+dates before writing anything, so a service line left open on one side lost its BT-134/BT-135
+entirely - and the same invoice produced two different documents depending on the protocol selected.
+One date alone is a period the norm accepts: BR-CO-20 asks for the start date or the end date, "or
+both".
+
 FIX: Generating two Factur-X sample invoices in the same request no longer ends on a PHP fatal error.
 The generator loaded its helper file with require rather than require_once, so the second call
 redeclared its functions - and a fatal error is not something the calling code can catch and report.
