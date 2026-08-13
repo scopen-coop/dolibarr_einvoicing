@@ -713,14 +713,29 @@ trait CommonProtocol
 					$thirdparty->tva_assuj = 1;
 				}
 			}
-			// Si le tiers n'est pas encore fournisseur, on le marque comme tel
-			// (ex. prospect/client qui reçoit sa 1ère facture fournisseur).
+			// Flag the thirdparty as a vendor if it is not one yet
+			// (ex: a prospect or customer receiving its first supplier invoice).
 			if (!$thirdparty->fournisseur) {
 				$thirdparty->fournisseur = 1;
-				$thirdparty->code_fournisseur = 'auto';
 			}
 
-			$result = $thirdparty->update(0, $user);
+			// A thirdparty code may be mandatory (MAIN_COMPANY_CODE_ALWAYS_REQUIRED, or a numbering
+			// module refusing an empty code): verify() then refuses every update of a thirdparty saved
+			// without one, and the whole synchronization stops on it. Ask for a generated code when the
+			// numbering module allows it. The allowmod flags are required twice over: update() checks
+			// them before writing the code columns, and it is also how the thirdparty card saves a code.
+			$allowmodcodeclient = 0;
+			$allowmodcodefournisseur = 0;
+			if (empty($thirdparty->code_fournisseur) && $thirdparty->codefournisseur_modifiable()) {
+				$thirdparty->code_fournisseur = 'auto';
+				$allowmodcodefournisseur = 1;
+			}
+			if (!empty($thirdparty->client) && empty($thirdparty->code_client) && $thirdparty->codeclient_modifiable()) {
+				$thirdparty->code_client = 'auto';
+				$allowmodcodeclient = 1;
+			}
+
+			$result = $thirdparty->update(0, $user, 1, $allowmodcodeclient, $allowmodcodefournisseur);
 			if ($result < 0) {
 				$this->error = $thirdparty->error;
 				$this->errors = $thirdparty->errors;
@@ -800,6 +815,17 @@ trait CommonProtocol
 			$sellername = trim($sellerInfo['sellername'] ?? '');
 			$selleremail = trim($sellerInfo['sellercontactemailaddr'] ?? '');
 			$sellervat = trim($sellerInfo['sellerTaxRegistations']['VA'] ?? '');
+			$sellerzip = trim($sellerInfo['sellerpostcode'] ?? '');
+			$sellertown = trim($sellerInfo['sellercity'] ?? '');
+			$sellercountrycode = trim($sellerInfo['sellercountry'] ?? '');
+			$selleraddress = trim($sellerInfo['sellerlineone'] ?? '');
+			if (!empty($sellerInfo['sellerlinetwo'])) {
+				$selleraddress .= "\n" . $sellerInfo['sellerlinetwo'];
+			}
+			if (!empty($sellerInfo['sellerlinethree'])) {
+				$selleraddress .= "\n" . $sellerInfo['sellerlinethree'];
+			}
+
 
 			$createParams = [];
 
@@ -810,7 +836,7 @@ trait CommonProtocol
 				$createParams['email'] = $selleremail;
 			}
 			if (!empty($sellervat)) {
-				$createParams['vatnumber'] = $sellervat;
+				$createParams['tva_intra'] = $sellervat;
 			}
 			if (!empty($sellerInfo['sellerGlobalIds']) && is_array($sellerInfo['sellerGlobalIds'])) {
 				foreach ($sellerInfo['sellerGlobalIds'] as $idScheme => $globalId) {
@@ -822,6 +848,22 @@ trait CommonProtocol
 					}
 				}
 			}
+			if (!empty($selleraddress)) {
+				$createParams['address'] = $selleraddress;
+			}
+			if (!empty($sellerzip)) {
+				$createParams['zipcode'] = $sellerzip;
+			}
+			if (!empty($sellertown)) {
+				$createParams['town'] = $sellertown;
+			}
+			if (!empty($sellercountrycode)) {
+				$countryid = dol_getIdFromCode($this->db, $sellercountrycode, 'c_country');
+				if ($countryid > 0) {
+					$createParams['country_id'] = $countryid;
+				}
+			}
+
 
 			// Create URL to prefill thirdparty creation form
 			$createUrl = DOL_URL_ROOT . '/societe/card.php?action=create&type=f';
@@ -830,6 +872,8 @@ trait CommonProtocol
 			}
 			$createUrl .= '&backtopage=' . urlencode(dol_buildpath('/einvoicing/document_list.php', 1));
 
+			$langs->loadLangs(array("companies", "einvoicing@einvoicing"));
+
 			$errorDetails = [];
 			// The caller renders $actiondata as "key: value" pairs, the flat shape the PRODUCT_NOT_FOUND
 			// case returns. Building it as a list of one-entry arrays made every value reach the message
@@ -837,15 +881,15 @@ trait CommonProtocol
 			// index 0 - so the vendor name never made it there.
 			$actiondata = [];
 			if (!empty($sellername)) {
-				$errorDetails[] = 'Supplier: ' . $sellername;
+				$errorDetails['name'] = $langs->trans("Supplier").': ' . $sellername;
 				$actiondata['name'] = $sellername;
 			}
 			if (!empty($selleremail)) {
-				$errorDetails[] = 'Email: ' . $selleremail;
+				$errorDetails['email'] = $langs->trans("Email").': ' . $selleremail;
 				$actiondata['email'] = $selleremail;
 			}
 			if (!empty($sellervat)) {
-				$errorDetails[] = 'Vat number: ' . $sellervat;
+				$errorDetails['vatnumber'] = $langs->trans("VATIntra").': ' . $sellervat;
 				$actiondata['vatnumber'] = $sellervat;
 			}
 			if (!empty($sellerInfo['sellerGlobalIds']) && is_array($sellerInfo['sellerGlobalIds'])) {
@@ -853,7 +897,7 @@ trait CommonProtocol
 					if (!empty($globalId)) {
 						$idprofField = $this->_mapGlobalIdSchemeToIdprof($idScheme, $sellerCountryCode);
 						if (!empty($idprofField)) {
-							$errorDetails[] = $idprofField.': ' . $globalId;
+							$errorDetails[$idprofField] = $langs->trans($idprofField).': ' . $globalId;
 							$actiondata[$idprofField] = $globalId;
 						}
 					}
@@ -862,7 +906,8 @@ trait CommonProtocol
 
 			$detailsStr = !empty($errorDetails) ? ' [' . implode(' - ', $errorDetails) . ']' : '';
 
-			$message = 'Unable to find supplier' . $detailsStr . '. Auto-creation of thirdparties is disabled in settings.';
+			$message = $langs->trans("FailedToFindSupplier"). ' ' . $detailsStr . ". \n";
+			$message .= $langs->trans("AutoCreateThirdPartyOffCreateItManually");
 
 			$action = $langs->trans('CreateSupplierManually');
 			$action .= '<a class="butAction small" href="' . dol_escape_htmltag($createUrl) . '" target="_blank">';
@@ -1101,6 +1146,8 @@ trait CommonProtocol
 			$prodDesc = trim($lineData['proddesc'] ?? '');
 			$vendorId = $lineData['supplierId'];
 
+			$langs->loadLangs(array("product", "einvoicing@einvoicing"));
+
 			$errorDetails = [];
 			$createParams = [];
 			$actiondata = ['ref' => $prodRef, 'supplierref' => $prodSupplierRef, 'name' => $prodName];
@@ -1121,7 +1168,7 @@ trait CommonProtocol
 				$createParams['supplierref'] = $prodSupplierRef;			// TODO Dolibarr must be able to handle this parameter
 			}
 			if (!empty($prodName)) {
-				$errorDetails[] = 'Name: ' . $prodName;
+				$errorDetails[] = $langs->trans("Name").': ' . $prodName;
 				$createParams['label'] = $prodName;
 			}
 			if (!empty($prodDesc)) {
@@ -1161,6 +1208,7 @@ trait CommonProtocol
 			$action .= $langs->trans($prodType == 1 ? 'CreateTheService' : 'CreateTheProduct');
 			$action .= '</a>';
 
+
 			// Second choice: map the vendor product reference(s) of this flow onto existing Dolibarr products.
 			// This creates the vendor reference (llx_product_fournisseur_price) that the matching uses at step 1,
 			// so the next synchronization will find the product without creating a new one.
@@ -1173,10 +1221,11 @@ trait CommonProtocol
 
 				$action .= ' ' . $langs->trans("or") . ' ';
 				$action .= '<a class="butAction smallpaddingimp" href="' . dol_escape_htmltag($mappingUrl) . '" target="_blank">';
-				$action .= '<i class="fas fa-link"></i> ';
+				$action .= '<i class="fas fa-link unsetcolor"></i> ';
 				$action .= $langs->trans('MapToAnExistingProduct');
 				$action .= '</a>';
 			}
+
 
 			return array(
 				'res' => -1,
@@ -1377,6 +1426,36 @@ trait CommonProtocol
 	}
 
 	/**
+	 * Refuse to build a line whose VAT category requires a Seller VAT identifier the seller has not got.
+	 *
+	 * BR-E-02 and its siblings BR-S-02, BR-Z-02 and BR-AE-02 are satisfied by either the Seller VAT
+	 * identifier (BT-31, schemeID VA) or the Seller tax registration identifier (BT-32, schemeID FC),
+	 * which is why a seller charging no VAT can identify itself with its SIREN. BR-G-02 and BR-IC-02
+	 * are not: their assertion reads schemeID = 'VA' alone, so an exportation or an intracommunity
+	 * supply demands a real VAT number and no fallback can stand in for it.
+	 *
+	 * Without this the document is built, sent, and refused by the platform on a rule the operator has
+	 * no way to connect to a missing field - the same reason BR-S-02 is reported here rather than left
+	 * to the platform (issue #560).
+	 *
+	 * @param	Societe		$seller		Selling company
+	 * @param	string		$rule		Business rule that will be broken, for the message
+	 * @param	string		$operation	What the invoice does, in words, for the message
+	 * @return	void
+	 * @throws	Exception				When the seller has no VAT number to declare
+	 */
+	private function assertSellerVatIdentifier($seller, $rule, $operation)
+	{
+		if (!empty($seller->tva_intra)) {
+			return;
+		}
+
+		$why = ': that rule accepts the seller VAT identifier (BT-31) only, not the tax registration identifier (BT-32) a seller charging no VAT would declare.';
+
+		throw new Exception('BADVATNUMBER[' . $rule . ']: The VAT number of the seller ' . $seller->name . ' is mandatory on ' . $operation . $why);
+	}
+
+	/**
 	 * Get the category of the VAT rate and the VATEX code and reason.
 	 *
 	 * @param 	CommonInvoiceLine		$line			Invoice line
@@ -1552,10 +1631,12 @@ trait CommonProtocol
 						}
 					}
 				} elseif (!$buyer->thirdparty->isInEEC()) {
+					$this->assertSellerVatIdentifier($seller, 'BR-G-02', 'an exportation outside the EU');
 					$categoryVAT = 'G';
 					$exemptionReasonCode = 'VATEX-EU-G';
 					$exemptionReason = 'Exportation outside UE';
 				} elseif ($buyer->thirdparty->isInEEC() && $seller->country_code != $buyer->thirdparty->country_code) {
+					$this->assertSellerVatIdentifier($seller, 'BR-IC-02', 'an intracommunity supply');
 					$categoryVAT = 'K';		// Intra communautary VAT
 					$exemptionReasonCode = 'VATEX-EU-IC';
 					$exemptionReason = 'Intracommunautary VAT';

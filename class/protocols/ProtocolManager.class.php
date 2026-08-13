@@ -37,7 +37,6 @@ class ProtocolManager
 	public const EXCEPTION_UNSUPPORTED_FORMAT = -100;
 	public const EXCEPTION_UNKNOWN_FORMAT = -101;
 
-
 	/**
 	 * Initialize available protocols.
 	 * @param DoliDB $db db
@@ -58,9 +57,11 @@ class ProtocolManager
 			),
 			'FACTURX' => array(
 				'protocol_name' => 'FACTURX',
-				'protocol_dol_min' => '24.0',
+				'protocol_label' => 'Factur-X',
 				'description' => 'Factur-X is a French-German hybrid e-invoicing format combining a readable PDF invoice with embedded XML data for seamless automated processing.',
-				'is_enabled' => $facturexIsOk
+				'is_enabled' => $facturexIsOk,
+				'is_greyed' => (version_compare(PHP_VERSION, '7.3.0') < 0) ? 'PHP 7.3+' : ''
+				//'protocol_dol_min' => '24.0'	//experience a lot of trouble with autoload/tcpdf lib conflict and more with < 24.0. Use is possible but must be SERIOUSLY discouraged.
 			),
 			'UBL' => array(
 				'protocol_name' => 'UBL',
@@ -78,6 +79,34 @@ class ProtocolManager
 	public function getProtocolsList()
 	{
 		return $this->protocolsList;
+	}
+
+	/**
+	 * File names of the "last invoice that could not be processed" diagnostic slots, one per enabled
+	 * protocol (the readable view has a single name, AbstractProtocol::INCOMING_DIAGNOSTIC_READABLE_FILE_NAME).
+	 * Asking the protocols keeps the pages that display or clear the diagnostic in step with the names
+	 * the reception actually writes.
+	 *
+	 * @return list<string>		File names, relative to the module temp directory
+	 */
+	public function getIncomingDiagnosticFileNames()
+	{
+		dol_include_once('/einvoicing/class/protocols/AbstractProtocol.class.php');
+
+		$names = array();
+
+		// We must loop only on the selected preferred protocol that is the only one reliable.
+		// Trying to use other badly supported format like Factur-X when recommended CII is on generates too much
+		// crashed on too many configurations (error Oauth, error duplicate include, etc...)
+		// foreach (array_keys($this->protocolsList) as $name) {
+		$name = getDolGlobalString('EINVOICING_PROTOCOL');
+		$protocol = $this->getProtocol($name);
+		if ($protocol instanceof AbstractProtocol) {
+			$names[] = $protocol::getIncomingDiagnosticFileName();
+		}
+		//}
+
+		return array_values(array_unique($names));
 	}
 
 	/**

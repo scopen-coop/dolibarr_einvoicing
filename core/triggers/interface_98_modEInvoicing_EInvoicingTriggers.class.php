@@ -300,13 +300,11 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 				setEventMessage($langs->trans("ModuleEInvoicingName") . ' : ' . $langs->trans('EInvoiceReplacedSupplierInvoiceClosed', $object->ref), 'mesgs');
 			}
 
-			// fr:205 (Approuvée) is the answer the buyer owes its vendor on a received invoice, and
+			// fr:205 (Approved) is the answer the buyer owes its vendor on a received invoice, and
 			// validating that invoice in Dolibarr is the act of accepting it: it leaves the draft state to
 			// enter the accounts and become payable. So the status is sent here rather than waiting for
 			// someone to remember the button on the card, which is how it was reported until now - and a
 			// vendor left without an answer has no way to tell an accepted invoice from a forgotten one.
-			// Unlike 211, this one is on by default; EINVOICING_DISABLE_SEND_APPROVED_ON_VALIDATION turns
-			// it off for an operator whose validation does not mean approval, and the button stays.
 			$einvoicing = new EInvoicing($this->db);
 			if (SupplierInvoiceHelper::shouldSendApprovedOnValidation($einvoicing, (int) $object->id, $object->element)) {
 				$PDPManager = new PDPProviderManager($this->db);
@@ -443,8 +441,8 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 	 *
 	 * The reform only requires the payment data for the operations whose VAT is due on collection, which is
 	 * exactly what the VAT exigibility scheme of the company says. einvoicingVatDueOnCollection() answers
-	 * that from the VAT mode of the Tax/VAT module setup, or from the regime the seller declared explicitly
-	 * in the module setup, and the generated document answers the neighbouring question in BT-8.
+	 * that from the VAT mode of the Tax/VAT module setup, the one place that holds it, and the generated
+	 * document answers the neighbouring question in BT-8.
 	 *
 	 * @param  Facture $invoice Invoice that has been cashed in
 	 * @return bool             True if the status has to be sent

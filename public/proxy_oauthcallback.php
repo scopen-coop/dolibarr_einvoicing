@@ -109,7 +109,8 @@ $statewithscopeonly = '';
 $statewithanticsrfonly = '';
 
 $requestedpermissionsarray = array();
-if ($state) { // Used to stoe scope and anti-csrf value. The scope is stored in the first part of the state, before the first dash. The anti-csrf value is stored in the second part of the state, after the first dash (exemple: scope1,scope2,scope3-jetonAntiCSRF)
+if ($state) { // Used to store scope and anti-csrf value. The scope is stored in the first part of the state, before the first dash.
+	// The anti-csrf value is stored in the second part of the state, after the first dash (example: scope1,scope2,scope3-jetonAntiCSRF)
 	// 'state' parameter is standard to store a hash value and can also be used to retrieve some parameters back
 	$statewithscopeonly = preg_replace('/\-.*$/', '', $state);
 	if ($statewithscopeonly != 'none') {
@@ -206,6 +207,8 @@ if ($action != 'delete' && !GETPOST('afteroauthloginreturn') && (empty($statewit
 		$backtourl = GETPOST('redirect_uri').(strpos(GETPOST('redirect_uri'), '?') !== false ? '&' : '?').'error=scopeundefined';
 
 		// TODO Test that backtourl start with the allowed domain
+		//var_dump($backtourl);exit;
+
 
 		header('Location: '.$backtourl);
 		exit();
@@ -227,8 +230,37 @@ if ($keyforurl) {
 $oauthserverurl = $providerconfig['prod_auth_url'];
 $oauthserverurl .= (preg_match('/\/$/', $oauthserverurl) ? '' : '/').'authorize?client_id='.urlencode(getDolGlobalString($keyforparamid)).'&response_type=code&state='.urlencode($state);
 
+if (getDolGlobalString('EINVOICING_SUPERPDPVIAPARTNER_SEND_AND_RECEIVE')) {
+	$oauthserverurl .= '&superpdp_send_and_receive='.getDolGlobalString('EINVOICING_SUPERPDPVIAPARTNER_SEND_AND_RECEIVE');
+}
+if (getDolGlobalInt('EINVOICING_SUPERPDPVIAPARTNER_ONLY_FUTURE')) {
+	$oauthserverurl .= '&superpdp_only_future=true';
+}
+if (getDolGlobalString('EINVOICING_SUPERPDPVIAPARTNER_DIRECTORY_ENTRY_IDENTIFIER')) {
+	$oauthserverurl .= '&directory_entry_identifier='.urlencode(getDolGlobalString('EINVOICING_SUPERPDPVIAPARTNER_DIRECTORY_ENTRY_IDENTIFIER'));
+}
+
 $save_redirect_uri = GETPOST('redirect_uri');
-// TODO Test that redirect_uri match an allowed url/domain
+
+// Test that redirect_uri match an allowed url/domain
+if (getDolGlobalString('EINVOICING_SUPERPDPVIAPARTNER_ONLY_DOMAIN')) {		// Example: domainofproxycompany.com
+	$domainofuser = getDomainFromURL($save_redirect_uri, 2);
+	$alloweddomains = explode(',', getDolGlobalString('EINVOICING_SUPERPDPVIAPARTNER_ONLY_DOMAIN'));
+	$allowed = 0;
+	foreach ($alloweddomains as $allowedomain) {
+		if (preg_match('/'.preg_quote($allowedomain, '/').'$/', $domainofuser)) {
+			$allowed = 1;
+			break;
+		}
+	}
+	if (!$allowed) {
+		print 'Error, the domain of the requester ('.$domainofuser.') extracted from redirect_uri ('.$save_redirect_uri.') is not among allowed domains.';
+		exit;
+	}
+}
+
+
+
 
 $redirect_uri = dol_buildpath('einvoicing/public/proxy_oauthcallback.php', 3);
 $oauthserverurl .= '&redirect_uri='.urlencode($redirect_uri);

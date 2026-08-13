@@ -47,7 +47,7 @@ class PDPProviderManager
 	{
 		// Access point declaration
 		// You can enter entry for a new access point here.
-		global $langs;
+		global $langs, $mysoc;
 		global $dolibarr_main_url_root;
 
 		// Define $urlwithroot
@@ -67,7 +67,7 @@ class PDPProviderManager
 				'class' => 'EsalinkPDPProvider',
 				'position' => 10,
 				'provider_countries' => array('FR'),
-				'provider_name' => picto_from_langcode('FR').' ESALINK <span class="opacitymedium">('.$langs->trans("NeedASubscriptionTo", "PDPLibre").')</span>',
+				'provider_name' => picto_from_langcode('FR', 'style="width: 16px"').' ESALINK <span class="opacitymedium">('.$langs->trans("NeedASubscriptionTo", "PDPLibre").')</span>',
 				'description' => 'Esalink PDP Integration',
 				'is_enabled' => 1,
 				'prod_account_admin_url' => 'https://pdplibre.org/solutions/',
@@ -77,27 +77,29 @@ class PDPProviderManager
 				'class' => 'SuperPDPProvider',
 				'position' => getDolGlobalString('EINVOICING_SUPERPDP_VIAPARTNER') ? 2 : 20,
 				'provider_countries' => array('all'),
-				'provider_name' => picto_from_langcode('FR').' SuperPDP'.(getDolGlobalString('EINVOICING_SUPERPDP_VIAPARTNER') ? ' <span class="opacitymedium">('.$langs->trans("UsingYourOwnBillingAccount").")</span>" : ""),
+				'provider_name' => picto_from_langcode('FR', 'style="width: 16px"').' SuperPDP'.(getDolGlobalString('EINVOICING_SUPERPDP_VIAPARTNER') ? ' <span class="opacitymedium">('.$langs->trans("UsingYourOwnBillingAccount").")</span>" : ""),
 				'description' => 'SuperPDP Integration',
 				'note' => 'Use "client_credentials" mode',
 				//'is_enabled' => getDolGlobalString('EINVOICING_TEST_SUPERPDP'),
 				'is_enabled' => 1,
 				'prod_account_admin_url' => 'https://www.superpdp.tech/app/users/create',
 				'test_account_admin_url' => 'https://www.superpdp.tech/app/users/create',
-			),
-			// Reference implementation, to copy when integrating a new platform. It talks to no platform,
-			// so it is only offered when the developer tools of the module are enabled.
-			'TESTPDP' => array(
+			)
+		);
+
+		// An implementation that only generate documents (no network access). It talks to no platform. This can be used by some countries like Germany or user that push files to a platformmanually.
+		if ($mysoc->country_code != 'FR' || getDolGlobalString('EINVOICING_ALLOW_DEVTOOLS')) {
+			$this->providersList['TESTPDP'] = array(
 				'class' => 'TestPDPProvider',
 				'position' => 100,
 				'provider_countries' => array('all'),
-				'provider_name' => 'TESTPDP <span class="opacitymedium">(sample provider, sends nothing)</span>',
-				'description' => 'Sample PDP Integration',
-				'is_enabled' => getDolGlobalInt('EINVOICING_ALLOW_DEVTOOLS') ? 1 : 0,
-				'prod_account_admin_url' => 'https://example.com',
-				'test_account_admin_url' => 'https://example.com',
-			)
-		);
+				'provider_name' => img_picto('', 'generic', 'style="width: 16px"').' None <span class="opacitymedium">(Einvoice generation only, no send/receive)</span>',
+				'description' => 'EInvoice generation only',
+				'is_enabled' => 1,
+				'prod_account_admin_url' => '',
+				'test_account_admin_url' => '',
+			);
+		}
 
 		// Add entry to use SuperPDP via OAuth delegation.
 		if (getDolGlobalString('EINVOICING_SUPERPDP_VIAPARTNER')) {
@@ -177,7 +179,7 @@ class PDPProviderManager
 	 * See einvoicing/doc/ADD-A-PDP-PROVIDER.md for the complete contract.
 	 *
 	 * A hook is used rather than a scan of the module directories because it lists only the providers
-	 * of the modules that are enabled, it costs nothing when no module implements it, and it lets the
+	 * of the modules that are enabled, it costs nothing when no module implements it, and it let the
 	 * module build its own entry (position, urls, label translated in the language of the user).
 	 *
 	 * @return void

@@ -85,8 +85,10 @@ class TestPDPProvider extends AbstractPDPProvider
 
 		// The protocol builds the XML (CII, Factur-X, UBL...). It is chosen by the user, not by the
 		// provider, so every provider loads it the same way.
+		/*
 		$ProtocolManager = new ProtocolManager($this->db);
 		$this->exchangeProtocol = $ProtocolManager->getProtocol(getDolGlobalString('EINVOICING_PROTOCOL'));
+		*/
 	}
 
 
@@ -131,9 +133,11 @@ class TestPDPProvider extends AbstractPDPProvider
 
 		// Credentials. The '_PROD' suffix keeps the production credentials apart from the test ones, so
 		// switching EINVOICING_LIVE does not make the module talk to a platform with the wrong keys.
+		/*
 		$item = $formSetup->newItem($prefix.'API_KEY'.(getDolGlobalInt('EINVOICING_LIVE') ? '_PROD' : ''));
 		$item->nameText = $langs->transnoentities('EINVOICING_API_KEY');
 		$item->cssClass = 'minwidth500';
+		*/
 
 		// Token. The link triggers the action set<prefix>TOKEN read by admin/setup.php, which calls
 		// getAccessToken() below.
@@ -329,6 +333,12 @@ class TestPDPProvider extends AbstractPDPProvider
 		$einvoicing = new EInvoicing($this->db);
 
 		try {
+			if (empty($this->exchangeProtocol)) {
+				$exchangeProtocolConf = getDolGlobalString('EINVOICING_PROTOCOL');
+				$ProtocolManager = new ProtocolManager($this->db);
+				$this->exchangeProtocol = $ProtocolManager->getProtocol($exchangeProtocolConf);
+			}
+
 			if ((float) DOL_VERSION < 24.0) {
 				$resarray = $this->exchangeProtocol->generateSampleInvoiceOld($einvoicing);
 			} else {

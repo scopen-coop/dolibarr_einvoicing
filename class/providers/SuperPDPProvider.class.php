@@ -97,7 +97,7 @@ class SuperPDPProvider extends AbstractPDPProvider
 		$this->helpToGetCredentials .= '<div class="margintoponly">' . $langs->trans("EINVOICING_SUPERPDP_HELP_CREDENTIAL3", '{s2}') . '</div>';
 		$this->helpToGetCredentials .= '<div class="margintoponly">' . $langs->trans("EINVOICING_SUPERPDP_HELP_CREDENTIAL4", '{s3}', '{s4}', '{s5}', '{s6}') . '</div>';
 		// Stated apart from the steps: this one setting decides whether received invoices can be read at all
-		$this->helpToGetCredentials .= '<div class="margintoponly warning">' . img_picto('', 'warning') . ' ' . $langs->trans("EINVOICING_SUPERPDP_HELP_CREDENTIAL_CONVERSION") . '</div>';
+		//$this->helpToGetCredentials .= '<div class="margintoponly warning">' . img_picto('', 'warning') . ' ' . $langs->trans("EINVOICING_SUPERPDP_HELP_CREDENTIAL_CONVERSION") . '</div>';
 
 		if (getDolGlobalString('EINVOICING_PDP') == 'SUPERPDPViaPartner') {
 			$this->helpToGetCredentials = '<div class="">' . $langs->trans("EINVOICING_SUPERPDP_HELP_CREDENTIAL_VIA_PARTNER", '{s1}') . '</div>';
@@ -110,9 +110,11 @@ class SuperPDPProvider extends AbstractPDPProvider
 		// Retrieve and complete the OAuth token information from the database
 		$this->tokenData = $this->fetchOAuthTokenDB();
 
+		/*
 		$exchangeProtocolConf = getDolGlobalString('EINVOICING_PROTOCOL');
 		$ProtocolManager = new ProtocolManager($this->db);
 		$this->exchangeProtocol = $ProtocolManager->getProtocol($exchangeProtocolConf);
+		*/
 	}
 
 
@@ -316,6 +318,12 @@ class SuperPDPProvider extends AbstractPDPProvider
 				$item->nameText = $langs->trans('EINVOICING_SUPERPDP_ONLY_FUTURE');
 				$item->helpText = $langs->transnoentities('EINVOICING_SUPERPDP_ONLY_FUTURE_HELP');
 				$item->defaultFieldValue = '0';
+				$item->cssClass = 'minwidth500';
+
+				$item = $formSetup->newItem($prefix.'ONLY_DOMAIN');
+				$item->nameText = $langs->trans('EINVOICING_SUPERPDP_ONLY_DOMAIN');
+				$item->helpText = $langs->transnoentities('EINVOICING_SUPERPDP_ONLY_DOMAIN_HELP');
+				$item->defaultFieldValue = '';
 				$item->cssClass = 'minwidth500';
 
 				$item = $formSetup->newItem($prefix.'DIRECTORY_ENTRY_IDENTIFIER');
@@ -995,6 +1003,12 @@ class SuperPDPProvider extends AbstractPDPProvider
 		$einvoicing = new EInvoicing($this->db);
 
 		try {
+			if (empty($this->exchangeProtocol)) {
+				$exchangeProtocolConf = getDolGlobalString('EINVOICING_PROTOCOL');
+				$ProtocolManager = new ProtocolManager($this->db);
+				$this->exchangeProtocol = $ProtocolManager->getProtocol($exchangeProtocolConf);
+			}
+
 			if ((float) DOL_VERSION < 24.0) {
 				$resarray = $this->exchangeProtocol->generateSampleInvoiceOld($einvoicing);
 			} else {

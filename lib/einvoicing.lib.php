@@ -648,20 +648,14 @@ if (!method_exists('Societe', 'findNearest')) {
  * TAX_MODE 1, the one that puts both sell modes on 'invoice'. Conf::setValues() always populates the
  * two constants, defaulting to the French standard scheme.
  *
- * EINVOICING_VAT_POINT_DATE_CODE overrides it for a seller whose regime the Tax/VAT setup does not
- * express. Declaring an invoice date (5) or a delivery date (29) is declaring the debits option -
- * XP Z12-012 annexe A reads them as "date de la facture (TVA sur DEBITS)" and "date de livraison
- * (TVA sur DEBITS)" - while declaring a payment date (72) is declaring the seller did not take it.
+ * There is no option of this module to override it, deliberately: the same two constants are what the
+ * VAT report of Dolibarr declares on (compta/tva/, through tax.lib.php), so an override would make the
+ * document tell the buyer one regime while the seller declares its VAT under another.
  *
  * @return bool		True when the invoices must carry the "VAT on debits" mention
  */
 function einvoicingVatOnDebits()
 {
-	$forced = getDolGlobalString('EINVOICING_VAT_POINT_DATE_CODE');
-	if (in_array($forced, array('5', '29', '72'), true)) {
-		return ($forced !== '72');
-	}
-
 	return (getDolGlobalString('TAX_MODE_SELL_PRODUCT') != 'payment' && getDolGlobalString('TAX_MODE_SELL_SERVICE') != 'payment');
 }
 
@@ -680,8 +674,10 @@ function einvoicingVatOnDebits()
  * (TVA sur DEBITS)", "29 : date de livraison (TVA sur DEBITS)" and "72 : date de paiement (TVA sur
  * ENCAISSEMENTS)", and carries two rules on it:
  *
+ * @phpcs:ignore
  *   G1.43        "Le BT-8 ne sera obligatoire que si l'entreprise a opte pour la TVA sur les debits
  *                 et le specifie au moyen du code 5 (CII)"
+ * @phpcs:ignore
  *   BR-FR-MAP-03 "BT-8 est obligatoire pour les factures de service des lors que l'assujetti Vendeur
  *                 a opte pour les debits"
  *
@@ -695,9 +691,15 @@ function einvoicingVatOnDebits()
  *   TAX_MODE 1, "d'apres les debits" everything on invoice                     -> 5
  *   TAX_MODE 2                       everything on payment                     -> 72
  *
- * 29 is never derived. It says the same thing as 5 and BR-FR-MAP-29 states that "le PPF attend
- * uniquement 5", a 29 having to be reported as 5 to the public portal, so it is only ever sent when
- * the seller asked for it explicitly (issue #419).
+ * 29 is never sent. It says the same thing as 5, BR-FR-MAP-29 states that "le PPF attend uniquement 5"
+ * - a 29 having to be reported as 5 to the public portal - and Dolibarr has nothing to derive it from
+ * anyway: its own setup reads the goods delivery as "OnDelivery (SupposedToBeInvoiceDate)".
+ *
+ * None of this is a setting of this module. Dolibarr holds the scheme once, in admin/taxes.php, and
+ * that same setting decides how its VAT report is built, so a second place to state it would be a
+ * second place to state it differently: a document declaring the debits option to the buyer while the
+ * seller declares its VAT on collection, or the reverse. This is the same reason there is no option
+ * for the VAT regime of the seller (BT-31 / BT-32) - see einvoicingSellerVatRegime().
  *
  * @param  bool		$hasProductLine		The document carries at least one goods line
  * @param  bool		$hasServiceLine		The document carries at least one service line
@@ -706,20 +708,14 @@ function einvoicingVatOnDebits()
  */
 function einvoicingVatPointDateCode($hasProductLine, $hasServiceLine, $isDeposit = false)
 {
-	// A down payment is the one case the socle settles on its own, and it settles it against every
-	// other rule here: XP Z12-014 annexe A reads "La TVA est exigible a l'encaissement de l'acompte
-	// pour les livraisons de biens comme pour les prestations de service, meme avec option sur les
-	// debits". So it is decided first, before the declared regime and before the VAT mode. Dolibarr
+	// A down payment is the one case the socle settles on its own, and it settles it against every other rule here: XP Z12-014 annexe A reads
+	// @phpcs:ignore
+	// "La TVA est exigible a l'encaissement de l'acompte pour les livraisons de biens comme pour les prestations de service, meme avec option sur les debits".
+	// So it is decided first, before the declared regime and before the VAT mode. Dolibarr
 	// builds every down payment line as a goods line, so without this the document would say nothing
 	// while its cash-in is reported to the platform with the status 212 for that very reason.
 	if ($isDeposit) {
 		return '72';
-	}
-
-	// An explicitly declared regime is a statement about the seller, not about one document.
-	$forced = getDolGlobalString('EINVOICING_VAT_POINT_DATE_CODE');
-	if (in_array($forced, array('5', '29', '72'), true)) {
-		return $forced;
 	}
 
 	// The debits option is general and prevails over every invoice issued (G1.43), so it is declared
@@ -732,8 +728,8 @@ function einvoicingVatPointDateCode($hasProductLine, $hasServiceLine, $isDeposit
 	$sellServiceOnPayment = (getDolGlobalString('TAX_MODE_SELL_SERVICE') == 'payment');
 
 	// Nothing is sent when no operation of the document is taxed on collection. The socle reads that
-	// silence: XP Z12-014 annexe A describes a VAT due on collection as "avec BT-8 absent, ou bien
-	// present et signifiant a l'encaissement (72)", making the two equivalent.
+	// silence: XP Z12-014 annexe A describes a VAT due on collection as
+	// "avec BT-8 absent, ou bien present et signifiant a l'encaissement (72)", making the two equivalent.
 	if (($sellServiceOnPayment && $hasServiceLine) || ($sellProductOnPayment && $hasProductLine)) {
 		return '72';
 	}
@@ -760,11 +756,6 @@ function einvoicingVatPointDateCode($hasProductLine, $hasServiceLine, $isDeposit
  */
 function einvoicingVatDueOnCollection($hasProductLine, $hasServiceLine)
 {
-	$forced = getDolGlobalString('EINVOICING_VAT_POINT_DATE_CODE');
-	if (in_array($forced, array('5', '29', '72'), true)) {
-		return ($forced === '72');
-	}
-
 	$sellProductOnPayment = (getDolGlobalString('TAX_MODE_SELL_PRODUCT') == 'payment');
 	$sellServiceOnPayment = (getDolGlobalString('TAX_MODE_SELL_SERVICE') == 'payment');
 
@@ -776,6 +767,71 @@ function einvoicingVatDueOnCollection($hasProductLine, $hasServiceLine)
 	}
 
 	return (($sellServiceOnPayment && $hasServiceLine) || ($sellProductOnPayment && $hasProductLine));
+}
+
+/**
+ * VAT regime of the seller, as far as the identifier it declares on its invoices is concerned.
+ *
+ * EN 16931 lets a seller identify itself for tax purposes in two ways, and a document carries the one
+ * that matches its regime:
+ *
+ *   BT-31  Seller VAT identifier            ram:SpecifiedTaxRegistration/ram:ID[@schemeID='VA']
+ *   BT-32  Seller tax registration identif. ram:SpecifiedTaxRegistration/ram:ID[@schemeID='FC']
+ *
+ * A seller that charges VAT declares BT-31. A seller that does not - franchise en base de TVA of the
+ * micro-entrepreneur, and more generally the "Non assujetti a la TVA" setup of Dolibarr - has no VAT
+ * identifier to declare, and BT-32 is what the standard leaves it: in France, its SIREN. Without one
+ * or the other, every exempt line of the document trips BR-E-02 and the platform refuses it, which is
+ * the whole of issue #560.
+ *
+ * This is deliberately not a setting of this module, and there is no option to override it: Dolibarr
+ * already holds the regime in the setup of the company (Home - Setup - Company/Organization, the "VAT
+ * is used / is not used" radio, which admin/company.php writes into FACTURE_TVAOPTION as 1 or 0), and a
+ * second place to state the same thing is a second place for it to be stated differently. Nothing is
+ * re-derived from that constant here either: Societe::setMysoc() already turns it into ->tva_assuj, and
+ * getCategoryRate() already decides from that same ->tva_assuj whether a line is exempt. Reading the
+ * property the core computed is what keeps the two from ever disagreeing - a document declaring an
+ * exempt line while claiming a VAT registration, or the reverse.
+ *
+ * @param	Societe		$seller		Selling company, normally $mysoc
+ * @return	string					'standard' (the seller charges VAT, BT-31) or 'franchise' (it does not, BT-32)
+ */
+function einvoicingSellerVatRegime($seller)
+{
+	// The reading of tva_assuj is the one the core makes of it in get_default_tva(): for $mysoc it is
+	// always the int of FACTURE_TVAOPTION, but the column of a thirdparty also holds the literal forms,
+	// and there is no reason for this to answer differently from the core.
+	$assuj = $seller->tva_assuj;
+	$subjectToVat = !((is_numeric($assuj) && !$assuj) || (!is_numeric($assuj) && $assuj == 'franchise'));
+
+	return $subjectToVat ? 'standard' : 'franchise';
+}
+
+/**
+ * Tax registrations (BT-31 / BT-32) the seller declares, in the shape the two writers consume.
+ *
+ * One entry, because the two identifiers answer the same question and a document that carried both
+ * would be claiming a VAT registration it does not use. Which one is decided by the regime rather
+ * than by "is a VAT number recorded": a seller subject to VAT that simply left the field empty must
+ * keep getting the explicit BADVATNUMBER message that names what to fill in, not a silent fallback on
+ * its SIREN (issue #560).
+ *
+ * @param	Societe		$seller		Selling company, normally $mysoc
+ * @return	array<array{type:string,value:string}>	Registrations to write, possibly empty
+ */
+function einvoicingSellerTaxRegistrations($seller)
+{
+	if (einvoicingSellerVatRegime($seller) === 'franchise') {
+		// BT-32. In France the tax registration identifier of a company with no VAT number is its
+		// SIREN, which idprof1 holds; it is already what BT-30 carries under the scheme 0002.
+		$taxId = trim((string) ($seller->idprof1 ?? ''));
+
+		return $taxId !== '' ? array(array('type' => 'FC', 'value' => $taxId)) : array();
+	}
+
+	$vatNumber = trim((string) ($seller->tva_intra ?? ''));
+
+	return $vatNumber !== '' ? array(array('type' => 'VA', 'value' => $vatNumber)) : array();
 }
 
 /**
