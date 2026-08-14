@@ -713,7 +713,7 @@ $Lastsyncinfosql = "SELECT flow_id, updatedat";
 $Lastsyncinfosql .= " FROM ".MAIN_DB_PREFIX."einvoicing_document";
 $Lastsyncinfosql .= " WHERE provider = '".$db->escape($providershort)."'";
 $Lastsyncinfosql .= " AND entity = ".((int) $conf->entity);		// Do not use getentity here, must always be on 1 entity.
-$Lastsyncinfosql .= $db->order("updatedat", "DESC");
+$Lastsyncinfosql .= $db->order("updatedat,rowid", "DESC");
 $Lastsyncinfosql .= $db->plimit(1);
 
 $last_sync_db = 0;
@@ -1308,9 +1308,9 @@ while ($i < $imaxinloop) {
 					print $out;
 				} elseif ($key == 'fk_element_type') {
 					print '<span class="nowraponall">';
-					if ((string) $object->$key == 'Facture') {
+					if ((string) $object->$key == 'Facture' || (string) $object->$key == 'invoice') {
 						print img_picto('', 'bill', 'class="pictofixedwidth"').$langs->trans("Invoice");
-					} elseif ((string) $object->$key == 'FactureFournisseur') {
+					} elseif ((string) $object->$key == 'FactureFournisseur' || (string) $object->$key == 'invoice_supplier') {
 						print img_picto('', 'supplier_invoice', 'class="pictofixedwidth"').$langs->trans("SupplierInvoice");
 					}
 					print  '</span>';

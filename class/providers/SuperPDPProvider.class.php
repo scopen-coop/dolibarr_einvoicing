@@ -131,7 +131,7 @@ class SuperPDPProvider extends AbstractPDPProvider
 	 */
 	public function initFormSetup(&$formSetup, $prefix, $prefixenv, $providersConfig, $TFieldProtocols, $TFieldProfiles)
 	{
-		global $langs, $mysoc;
+		global $langs, $mysoc, $user;
 
 		$tokenData = $this->getTokenData();
 
@@ -159,6 +159,13 @@ class SuperPDPProvider extends AbstractPDPProvider
 					'response_type' => 'code',
 					'redirect_uri' => dol_buildpath('/einvoicing/admin/setup.php', 2)
 				];
+
+				if ($mysoc->email) {
+					$query['login_hint'] = $mysoc->email;
+				} elseif (!empty($user->email)) {
+					$query['login_hint'] = $user->email;
+				}
+
 				// Prefill company information: number and scheme must be paired together.
 				// Use 'sandbox' scheme for non-live environment, otherwise use country-specific scheme (fr_siren for France, be_numero_entreprise for Belgium).
 				if (!empty($mysoc->idprof1)) {
@@ -299,9 +306,11 @@ class SuperPDPProvider extends AbstractPDPProvider
 			// We suggest all these options if we are on the proxy.
 			if (getDolGlobalString('EINVOICING_SUPERPDP_VIAPARTNER') == 'proxy' && preg_match('/ViaPartner/', getDolGlobalString('EINVOICING_PDP'))) {
 				// Redirect URI to register in the SuperPDP interface (must match exactly)
+				$urlforredirecturiinproxymode = dol_buildpath('einvoicing/public/proxy_oauthcallback.php', 3);
+
 				$item = $formSetup->newItem($prefix.'REDIRECT_URI_INFO');
 				$item->nameText = $langs->trans('EINVOICING_SUPERPDP_REDIRECT_URI');
-				$item->fieldOverride = '<span class="opacitymedium">'.dol_escape_htmltag($this->callbackurl).'</span>';
+				$item->fieldOverride = '<span class="opacitymedium">'.dol_escape_htmltag($urlforredirecturiinproxymode).'</span>';
 				$item->helpText = $langs->transnoentities('EINVOICING_SUPERPDP_REDIRECT_URI_HELP');
 				$item->cssClass = 'minwidth500';
 
@@ -641,7 +650,9 @@ class SuperPDPProvider extends AbstractPDPProvider
 			'state'         => $state,
 		);
 
-		if (!empty($user->email)) {
+		if ($mysoc->email) {
+			$query['login_hint'] = $mysoc->email;
+		} elseif (!empty($user->email)) {
 			$query['login_hint'] = $user->email;
 		}
 
@@ -1912,6 +1923,9 @@ class SuperPDPProvider extends AbstractPDPProvider
 			return array('res' => -1, 'message' => "ERROR_FLOW_METADATA Failed to parse the json answer for flowId: " . $flowId);
 		}
 
+		$provider = getDolGlobalString('EINVOICING_PDP');
+		$providershort = preg_replace('/ViaPartner$/', '', $provider);
+
 		$document = new Document($this->db);
 		$document->date_creation        = dol_now();
 		$document->fk_user_creat        = $user->id;
@@ -1943,7 +1957,7 @@ class SuperPDPProvider extends AbstractPDPProvider
 		} else {
 			$document->updatedat = null;
 		}
-		$document->provider             = getDolGlobalString('EINVOICING_PDP') ?? null;
+		$document->provider             = $providershort ?: null;
 		$document->entity               = $conf->entity;
 		$document->flow_uiid            = $flowData['uuid'] ?? null;
 

@@ -837,7 +837,7 @@ class EInvoicing
 			}
 		}
 
-		if (empty($mysoc->tva_intra)) {
+		if (empty($mysoc->tva_intra) && (!empty($mysoc->tva_assuj) && $mysoc->tva_assuj != 'franchise')) {
 			$baseWarnings[] = $langs->trans("FxCheckErrorVATnumber");
 		}
 		if (!empty($mysoc->tva_intra) && !preg_match('/^[A-Z]{2}[A-Z0-9]{2,12}$/', $this->removeSpaces($mysoc->tva_intra))) { // Check VAT number format: 2-letter country code + 2 to 12 alphanumeric characters
@@ -2103,7 +2103,7 @@ class EInvoicing
 		$sql = "SELECT rowid, syncstatus, synccomment, flow_id, override_routing_id, provider, ap_precheck_status, ap_precheck_result"; // Validation message of einvoice sent.
 		$sql .= " FROM " . $this->db->prefix() . "einvoicing_extlinks";
 		$sql .= " WHERE element_type = 'facture'";
-		//$sql .= " AND provider = '" . $this->db->escape($provider) . "'";
+		//$sql .= " AND provider = '" . $this->db->escape($providershort) . "'";
 		if ($invoiceId > 0) {
 			$sql .= " AND element_id = " . ((int) $invoiceId);
 		} else {
