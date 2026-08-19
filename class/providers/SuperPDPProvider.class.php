@@ -422,7 +422,8 @@ class SuperPDPProvider extends AbstractPDPProvider
 					$item = $formSetup->newItem($prefix . 'ACTIONS');
 					$item->nameText = "&nbsp;";
 
-					$item->fieldOverride .= '<a class="reposition" href="' . $_SERVER["PHP_SELF"] . "?action=call" . $prefix . "HEALTHCHECK&token=" . newToken() . '"><i class="fa fa-heartbeat pictofixedwidth centerimp"></i>' . $langs->trans('testConnection') . ' (Healthcheck)</a><br>';
+					$item->fieldOverride .= '<a class="reposition" href="' . $_SERVER["PHP_SELF"] . "?action=call" . $prefix . "HEALTHCHECK&token=" . newToken() . '"><i class="fa fa-heartbeat pictofixedwidth centerimp"></i>' . $langs->trans('testConnection') . ' (Healthcheck)</a>';
+					$item->fieldOverride .= ' - <a class="reposition" href="' . $_SERVER["PHP_SELF"] . "?action=call" . $prefix . "REMOTEINFO&token=" . newToken() . '"><i class="fa fa-info-circle pictofixedwidth centerimp"></i>' . $langs->trans('showRemoteInfo') . '</a><br>';
 					$item->cssClass = 'minwidth500';
 
 					if ($tokenData['token'] && getDolGlobalString('EINVOICING_PROTOCOL')) {
@@ -763,6 +764,153 @@ class SuperPDPProvider extends AbstractPDPProvider
 		}
 
 		return $returnarray;
+	}
+
+	/**
+	 * Retrieve information about the current OAuth2 session/company from SuperPDP.
+	 *
+	 * @return array{status_code:int,response:null|string|array<string,mixed>,call_id:null|string}
+	 */
+	private function getRemoteSessionInfo()
+	{
+		return $this->callApi('oauth2_sessions/me', 'GET', false, [], 'get_remote_session_info');
+	}
+
+	/**
+	 * Check the status of the "ppf" entry in the SuperPDP directory (PPF network registration).
+	 * That can be used to determine if the company is registered and if the registration is valid.
+	 *
+	 * @return array{status_code:int,response:null|string|array<string,mixed>,call_id:null|string,ppf_identifier:string,ppf_status:string|null,ppf_effective_date:string,ppf_message:string,ppf_error:bool,listof_ppf_entries:string}
+	 */
+	private function checkDirectoryStatus()
+	{
+		$result = $this->callApi('directory_entries', 'GET', false, [], 'check_directory_status');
+
+		$entries = is_array($result['response']) ? ($result['response']['data'] ?? []) : [];
+		$ppfEntry = null;
+
+		$listofentries = '';
+		foreach ($entries as $entry) {
+			if (($entry['directory'] ?? null) === 'ppf') {		// Entry in PPF directory, not a peppol directory entry
+				if (is_null($ppfEntry)) {
+					$ppfEntry = $entry;		// We take the first one
+				}
+				if (!empty($listofentries)) {
+					$listofentries .= "<br>\n";
+				}
+				$listofentries .= $entry['identifier'] ?? 'No identifier';
+				$listofentries .= '-' . ($entry['company']['formal_name'] ?? 'No formal name');
+				$listofentries .= '-' . ($ppfEntry['effective_date'] ?? '');
+				$listofentries .= '-' . ($ppfEntry['status'] ?? '');
+			}
+		}
+
+		$result['ppf_identifier'] = $ppfEntry['identifier'] ?? '';
+		$result['ppf_status'] = $ppfEntry['status'] ?? null;
+		$result['ppf_effective_date'] = $ppfEntry['effective_date'] ?? '';
+		$result['ppf_message'] = $ppfEntry['status_message'] ?? '';
+
+		$result['listof_ppf_entries'] = $listofentries;
+		$result['ppf_error'] = ($result['ppf_status'] === 'error');
+
+		return $result;
+	}
+
+	// TODO: Add a function to check the company's Peppol Directory status and retrieve its registered Access Point, If the registered Access Point is not SuperPDP, display its name along with a warning message.
+
+	/**
+	 * Translate a SuperPDP KYC/KYB verification status enum value into a short, human-readable label.
+	 *
+	 * @param  string|null 	$status 	'verified', 'needs_review', 'failed' or 'not_verified'
+	 * @return string
+	 */
+	private function formatKycStatus($status)
+	{
+		global $langs;
+
+		switch ($status) {
+			case 'verified':
+				return $langs->trans('KYCStatusVerified');
+			case 'needs_review':
+				return $langs->trans('KYCStatusPending');
+			case 'failed':
+				return $langs->trans('KYCStatusFailed');
+			case 'not_verified':
+				return $langs->trans('KYCStatusNotVerified');
+			default:
+				return (string) $status;
+		}
+	}
+
+	/**
+	 * Retrieve and format remote account/company information from SuperPDP (session info + ppf directory status),
+	 * for display to the user (e.g. "Show your remote information" link in the setup page).
+	 *
+	 * @return array{status_code:int,message:string}
+	 */
+	public function getRemoteInfo()
+	{
+		global $langs, $mysoc;
+
+		// Check KYC status
+		$session = $this->getRemoteSessionInfo();	// Call the oauth2_sessions/me endpoint
+
+		$lines = array();
+		if ($session['status_code'] == 200 && is_array($session['response'])) {
+			$lines[] = $langs->trans('RemoteInfoCompanyVerification', $this->name, $this->formatKycStatus($session['response']['company_verification_status'] ?? null));
+			if (isset($session['response']['user_identity_verification_status'])) {		// Sometimes this is empty
+				$lines[] = $langs->trans('RemoteInfoUserVerification', $this->name, $this->formatKycStatus($session['response']['user_identity_verification_status'] ?? null));
+			}
+		} else {
+			$lines[] = $langs->trans('RemoteInfoSessionError') . ' (HTTP ' . ($session['status_code'] ?? 'N/A') . ')';
+		}
+		$lines[] = "";
+
+		// Check AP using SuperPDP api
+		$directory = $this->checkDirectoryStatus();
+
+		if ($directory['status_code'] == 200) {
+			$paName = (!$directory['ppf_error'] && $directory['ppf_status'] !== null) ? 'SuperPDP' : $langs->trans('RemoteInfoPAUndetermined');
+
+			if (empty($directory['ppf_identifier'])) {
+				$lines[] = $langs->trans('RemoteInfoPPFNoEntry', 'SuperPDP', $paName);
+			} else {
+				$lines[] = $langs->trans('RemoteInfoPPFDetection', 'SuperPDP', $paName) . ' <span class="smallimp">['. $directory['ppf_identifier'] . ' - ' . $langs->trans('RemoteInfoPPFStatusDetail', $directory['ppf_status']) . ' - ' . ($directory['ppf_status'] === 'error' ? $directory['ppf_message'] : $directory['ppf_effective_date']).']</span>';
+			}
+		} else {
+			$lines[] = $langs->trans('RemoteInfoDirectoryError') . ' (HTTP ' . ($directory['status_code'] ?? 'N/A') . ')';
+		}
+		$lines[] = "";
+
+		// Show registered PA for your company (Peppol directory)
+		$tokenData = $this->getTokenData();
+		if (!empty($tokenData['token']) && !empty($mysoc->country_code) && $mysoc->country_code === 'FR' && !empty($mysoc->idprof1)) {
+			$peppolPA = (new EInvoicing($this->db))->getPeppolAccessPointBySiren($mysoc->idprof1);
+			$detectedPA = (!empty($peppolPA['exists']) && !empty($peppolPA['pa_label'])) ? $peppolPA['pa_label'] : '';
+
+			if (empty($detectedPA)) {
+				$lines[] = $langs->trans('RemoteInfoPeppolPAUnknown');
+			} else {
+				$lines[] = $langs->trans('RemoteInfoPeppolPAMismatch', $detectedPA);
+				if (strcasecmp($detectedPA, 'SuperPDP') !== 0) {	// If not SuperPDP, show a warning
+					$msg = $langs->trans('RemoteInfoPeppolPAMismatchCheck', $detectedPA);
+					if (!empty($directory['ppf_identifier'])) {
+						$msg .= ' <b>'.$langs->trans('RemoteInfoPeppolPAMismatchRequestPortability', 'SuperPDP').'</b>';
+					}
+					$lines[] = $msg;
+
+					$directory['ppf_error'] = true;
+				}
+			}
+		}
+
+		// Return
+		$ok = ($session['status_code'] == 200 && $directory['status_code'] == 200 && !$directory['ppf_error']);
+
+		return array(
+			'status_code' => $ok ? 200 : 400,
+			'message' => implode('<br>', $lines).' <!-- listof_ppf_entries: '.$directory['listof_ppf_entries'].' -->',
+		);
 	}
 
 	/**
@@ -1166,8 +1314,9 @@ class SuperPDPProvider extends AbstractPDPProvider
 		// The OAuth token endpoint lives on the auth base (/oauth2/), not the Flow API base. This applies to
 		// every token grant: client_credentials, authorization_code and refresh_token.
 		$url = $this->getApiUrl(($resource == 'token' || $callType == 'get_access_token') ? 'auth' : 'api') . $resource;
-		if ($resource == 'validation_reports' || strpos($resource, 'french_directory') === 0) {
-			// validation_reports and the French directory lookup both live on the AP API base (v1.beta).
+		if ($resource == 'validation_reports' || strpos($resource, 'french_directory') === 0 || strpos($resource, 'oauth2_sessions') === 0 || strpos($resource, 'directory_entries') === 0) {
+			// validation_reports, the French directory lookup, the oauth2 session info and the directory
+			// entries listing all live on the AP API base (v1.beta).
 			$url = $this->getApiUrl('ap_api') . $resource;
 		}
 		if (strpos($resource, 'afnor-directory/') === 0) {
