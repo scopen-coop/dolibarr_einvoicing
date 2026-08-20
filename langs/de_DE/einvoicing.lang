@@ -4,7 +4,7 @@
 # Generic
 #
 
-ModuleEInvoicingName = EInvoicing
+ModuleEInvoicingName = E-Rechnung
 ModuleEInvoicingDesc = Support for E-invoice management. This module allows to generate (automatically or manually) invoices in E-invoice format and send them to an E-invoice Access Point. It can also retrieve purchase invoices from this E-invoice Access Point. Only few countries (France) and Access Point (also called PDP/PA) are supported.
 
 #
@@ -564,7 +564,7 @@ VendorProductLabelColumnHelp=The wording of the vendor, kept as it was received.
 DolibarrProductColumnHelp=The product the vendor reference resolves to. Only products flagged "for purchase" can be picked.
 VendorDeleted=Vendor deleted
 VendorDeletedHelp=This buying price refers to a vendor that no longer exists. The mapping is dead, it can be deleted.
-showRemoteInfo=Show my remote information
+showRemoteInfo=Show your remote information
 RemoteInfoCompanyVerification=Verification by %s of your company identify (KYB): %s
 RemoteInfoUserVerification=Verification by %s of your user identify (KYC): %s
 RemoteInfoSessionError=Unable to retrieve session information
