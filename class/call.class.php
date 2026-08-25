@@ -136,6 +136,7 @@ class Call extends CommonObject
 		"call_type" => array("type" => "varchar(50)", "label" => "Type", "enabled" => "1", 'position' => 25, 'notnull' => 1, "visible" => "1", "comment" => "Call type (SyncDocs, SyncSoc, FetchDoc, FetchSoc...)", "csslist" => "tdoverflowmax125"),
 		"method" => array("type" => "varchar(10)", "label" => "Method", "enabled" => "1", 'position' => 30, 'notnull' => 0, "visible" => "1", "comment" => "-- HTTP method (GET, POST, PUT, DELETE)"),
 		"endpoint" => array("type" => "varchar(255)", "label" => "Endpoint", "enabled" => "1", 'position' => 35, 'notnull' => 1, "visible" => "-1", "comment" => "-- URL or endpoint called"),
+		"request_id" => array("type" => "varchar(36)", "label" => "RequestId", "langs" => "einvoicing@einvoicing", "enabled" => "1", 'position' => 36, 'notnull' => 0, "visible" => "-1", "comment" => "-- Request-Id header sent with the call, to correlate our log with the one of the Access Point"),
 		"skippedflow" => array("type" => "integer", "label" => "SkippedFlows", "enabled" => "1", 'position' => 130, 'notnull' => 1, "visible" => "1", "comment" => "Skipped flows during the API call"),
 		"successflow" => array("type" => "integer", "label" => "SuccessfullFlows", "langs" => "einvoicing@einvoicing", "enabled" => "1", 'position' => 140, 'notnull' => 1, "visible" => "1", "comment" => "Successfully completed flows during the API call"),
 		"totalflow" => array("type" => "integer", "label" => "TotalFlows", "enabled" => "1", 'position' => 150, 'notnull' => 1, "visible" => "-1", "comment" => "Total flows handled during the API call"),
@@ -165,6 +166,7 @@ class Call extends CommonObject
 	public $call_type;
 	public $method;
 	public $endpoint;
+	public $request_id;
 	public $request_body;
 	public $response;
 
@@ -1219,24 +1221,38 @@ class Call extends CommonObject
 	/**
 	 *  Returns the reference to the following non used object with 'call' prefix.
 	 *
+	 *  Must be called inside a transaction opened on $this->db, and the record must be inserted
+	 *  on that same connection: the number is taken with a locking read held until that
+	 *  transaction ends. @see AbstractPDPProvider::logCall()
+	 *
 	 *  @return	?string      		Object free reference
 	 */
 	public function getNextCallId()
 	{
-		global $db;
-
 		$prefix = 'Call-';
 
+		// Read the highest number through the connection this record will be written on, not through
+		// the global $db. logCall() builds its Call on the independent $dbhistory precisely so the trace
+		// survives a rollback of the caller, and a number read on another connection can be neither
+		// current nor locked: a page working inside a transaction on $db - recording a payment,
+		// importing a received invoice - holds a consistent-read snapshot taken before the previous
+		// call was committed by $dbhistory, so the same number comes back twice and the second insert
+		// dies on uk_einvoicing_call_callid. The API call it was tracing then leaves no trace at all.
+		//
+		// FOR UPDATE holds the range from this read to that insert: being a locking read it returns the
+		// last committed number instead of a snapshot, and another request numbering at the same moment
+		// waits for the insert rather than taking the number again.
 		$sql = "SELECT MAX(CAST(SUBSTRING(call_id, ".(strlen($prefix) + 1).") AS SIGNED)) AS maxref";
-		$sql .= " FROM ".MAIN_DB_PREFIX.$this->table_element;
-		$sql .= " WHERE call_id LIKE '".$db->escape($prefix)."%'";
+		$sql .= " FROM ".$this->db->prefix().$this->table_element;
+		$sql .= " WHERE call_id LIKE '".$this->db->escape($prefix)."%'";
+		$sql .= " FOR UPDATE";
 
-		$resql = $db->query($sql);
+		$resql = $this->db->query($sql);
 		if (!$resql) {
 			return null;
 		}
 
-		$obj = $db->fetch_object($resql);
+		$obj = $this->db->fetch_object($resql);
 		$next = ((int) $obj->maxref) + 1;
 
 		return $prefix.sprintf('%06d', $next);

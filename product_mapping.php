@@ -182,7 +182,7 @@ if ($action == 'savemapping' && $permissiontoadd && !empty($parsedLines) && $soc
 			}
 
 			$reffourn = trim((string) ($parsedLine['prodsellerid'] ?? ''));
-			if ($reffourn === '' || $reffourn === '0000') {
+			if ($reffourn === '') {
 				// Without a vendor reference we have nothing to store the mapping on
 				continue;
 			}
@@ -233,24 +233,26 @@ llxHeader('', $title, $help_url, '', 0, 0, '', '', '', 'mod-einvoicing page-prod
 
 print load_fiche_titre($title, '', 'einvoicing.png@einvoicing');
 
-print '<span class="opacitymedium">'.$langs->trans("MapEInvoiceProductsDesc").'</span><br><br>';
+// The mappings saved here are only visible product by product afterwards, so point to the list of them.
+$vendorrefsurl = dol_buildpath('/einvoicing/vendorref_list.php', 1).($socid > 0 ? '?search_socid='.((int) $socid) : '');
+
+print '<div class="info"><span class="">'.$langs->trans("MapEInvoiceProductsDesc");
+print ' '.$langs->trans("MapEInvoiceProductsDesc2");
+print '</span>';
+print ' - <a class="" href="'.$vendorrefsurl.'">'.$langs->trans("SeeMappedVendorRefs").'</a>';
+print '</div><br>';
 
 // Form to select the flow to work on (prefilled when we come from the synchronization result)
 print '<form method="GET" action="'.$_SERVER["PHP_SELF"].'">';
 print '<div class="inline-block valignmiddle paddingright">'.$langs->trans("flow_id").' ';
-print '<input type="text" class="minwidth200" name="flowid" value="'.dol_escape_htmltag($flowid).'">';
+print '<input type="text" class="width200" name="flowid" value="'.dol_escape_htmltag($flowid).'">';
 print '</div>';
+print ' &nbsp; ';
 print '<div class="inline-block valignmiddle paddingright">'.$langs->trans("Supplier").' ';
 print $form->select_company($socid, 'socid', '(s.fournisseur:=:1)', 'SelectThirdParty', 0, 0, array(), 0, 'minwidth200');
 print '</div>';
 print '<input type="submit" class="button small" value="'.$langs->trans("Refresh").'">';
 print '</form>';
-
-// The mappings saved here are only visible product by product afterwards, so point to the list of them.
-$vendorrefsurl = dol_buildpath('/einvoicing/vendorref_list.php', 1).($socid > 0 ? '?search_socid='.((int) $socid) : '');
-print '<div class="paddingtop">';
-print '<a class="button small" href="'.$vendorrefsurl.'">'.$langs->trans("SeeMappedVendorRefs").'</a>';
-print '</div>';
 
 print '<br>';
 
@@ -329,7 +331,7 @@ if (!empty($parsedLines)) {
 			print ' '.$form->textwithpicto('', $matchresults[$idx]['message'], 1, 'help');
 		} elseif ($socid <= 0) {
 			print '<span class="opacitymedium">'.$langs->trans("SelectTheSupplierOfThisFlow").'</span>';
-		} elseif ($reffourn === '' || $reffourn === '0000') {
+		} elseif ($reffourn === '') {
 			// Without a vendor reference, the mapping has nothing to be stored on
 			print $form->textwithpicto('<span class="opacitymedium">'.$langs->trans("NotMappable").'</span>', $langs->trans("NotMappableBecauseNoVendorRef"), 1, 'warning');
 		} elseif ($permissiontoadd) {
