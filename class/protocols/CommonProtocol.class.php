@@ -630,28 +630,20 @@ trait CommonProtocol
 				if ($invoiceName === '') {
 					$invoiceName = trim($sellerInfo['sellerTradingName'] ?? '');
 				}
-				$nameMismatchWarning = $langs->trans('EInvoiceSupplierNameMismatchWarning', $invoiceName, $thirdparty->name);
+				$nameMismatchWarning = $langs->trans('EInvoiceSupplierNameMismatchWarning', $invoiceName, '{s1}');
+				$nameMismatchWarning = str_replace('{s1}', $thirdparty->getNomUrl(0, '', 0, 1), $nameMismatchWarning);
+
 				dol_syslog(get_class($this) . '::_syncOrCreateThirdpartyFromEInvoiceSeller ' . $nameMismatchWarning, LOG_WARNING);
 				dol_syslog(get_class($this) . '::_syncOrCreateThirdpartyFromEInvoiceSeller ' . $nameMismatchWarning, LOG_WARNING, 0, '_einvoicing');
-				setEventMessages($nameMismatchWarning, null, 'warnings');
+
+				setEventMessages($nameMismatchWarning, null, 'warnings', '', 1);
 			}
 		}
 
 		// Step 3: Create or update thirdparty
 
 		//$thirdpartyId = -2; // For testing
-
-		// if found, update information
 		if ($thirdpartyId > 0) {
-			// if complete info is disabled, we return directly the thirdpartyId
-			if (getDolGlobalInt('EINVOICING_THIRDPARTIES_COMPLETE_INFO')) {
-				dol_syslog(get_class($this) . '::_syncOrCreateThirdpartyFromEInvoiceSeller Complete info disabled, returning existing thirdparty: ' . $thirdpartyId);
-				return array(
-					'res' => $thirdpartyId,
-					'message' => 'Existing thirdparty used without update: ' . $thirdpartyId . ($nameMismatchWarning !== '' ? ' - ' . $nameMismatchWarning : '')
-				);
-			}
-
 			dol_syslog(get_class($this) . '::_syncOrCreateThirdpartyFromEInvoiceSeller Updating existing thirdparty: ' . $thirdpartyId);
 			// TODO: MAYBE we should call PDP to retrieve more information
 
@@ -659,84 +651,85 @@ trait CommonProtocol
 			$thirdparty->fetch($thirdpartyId);
 
 			// Update thirdparty information based on priority
-			if ($priority === 'pdp') { // Overwrite Dolibarr data with AP data
-				$thirdparty->name = $sellerInfo['sellername'] ?? $thirdparty->name;
-				$thirdparty->address = $sellerInfo['sellerlineone'] ?? $thirdparty->address;
-				if (!empty($sellerInfo['sellerlinetwo'])) {
-					$thirdparty->address .= "\n" . $sellerInfo['sellerlinetwo'];
-				}
-				if (!empty($sellerInfo['sellerlinethree'])) {
-					$thirdparty->address .= "\n" . $sellerInfo['sellerlinethree'];
-				}
-				$thirdparty->zip = $sellerInfo['sellerpostcode'] ?? $thirdparty->zip;
-				$thirdparty->town = $sellerInfo['sellercity'] ?? $thirdparty->town;
-				$thirdparty->country_code = $sellerInfo['sellercountry'] ?? $thirdparty->country_code;
-				$thirdparty->email = $sellerInfo['sellercontactemailaddr'] ?? $thirdparty->email;
-				$thirdparty->phone = $sellerInfo['sellercontactphoneno'] ?? $thirdparty->phone;
-				$thirdparty->fax = $sellerInfo['sellercontactfaxno'] ?? $thirdparty->fax;
-
-				// Set identification numbers
-				if (!empty($sellerInfo['sellerGlobalIds']) && is_array($sellerInfo['sellerGlobalIds'])) {
-					foreach ($sellerInfo['sellerGlobalIds'] as $idScheme => $globalId) {
-						if (!empty($globalId)) {
-							$idprofField = $this->_mapGlobalIdSchemeToIdprof($idScheme, $sellerCountryCode);
-							if (!empty($idprofField)) {
-								$thirdparty->$idprofField = $einvoicing->removeSpaces($globalId);
-							}
-						}
-					}
-				}
-				if (!empty($sellerInfo['sellerTaxRegistations']['VA'])) {
-					$thirdparty->tva_intra = $einvoicing->removeSpaces($sellerInfo['sellerTaxRegistations']['VA']);
-					$thirdparty->tva_assuj = 1;
-				}
-			} elseif ($priority === 'dolibarr') { // Fill only empty fields from pdp data
-				dol_syslog(get_class($this) . '::_syncOrCreateThirdpartyFromEInvoiceSeller Keeping existing thirdparty data and fill only empty fields as priority is dolibarr: ' . $thirdpartyId);
-
-				if (empty($thirdparty->name) && !empty($sellerInfo['sellername'])) {
-					$thirdparty->name = $sellerInfo['sellername'];
-				}
-				if (empty($thirdparty->address) && !empty($sellerInfo['sellerlineone'])) {
-					$thirdparty->address = $sellerInfo['sellerlineone'];
+			if (getDolGlobalInt('EINVOICING_THIRDPARTIES_COMPLETE_INFO')) {
+				if ($priority === 'pdp') { // Overwrite Dolibarr data with AP data
+					$thirdparty->name = $sellerInfo['sellername'] ?? $thirdparty->name;
+					$thirdparty->address = $sellerInfo['sellerlineone'] ?? $thirdparty->address;
 					if (!empty($sellerInfo['sellerlinetwo'])) {
 						$thirdparty->address .= "\n" . $sellerInfo['sellerlinetwo'];
 					}
 					if (!empty($sellerInfo['sellerlinethree'])) {
 						$thirdparty->address .= "\n" . $sellerInfo['sellerlinethree'];
 					}
-				}
-				if (empty($thirdparty->zip) && !empty($sellerInfo['sellerpostcode'])) {
-					$thirdparty->zip = $sellerInfo['sellerpostcode'];
-				}
-				if (empty($thirdparty->town) && !empty($sellerInfo['sellercity'])) {
-					$thirdparty->town = $sellerInfo['sellercity'];
-				}
-				if (empty($thirdparty->country_code) && !empty($sellerInfo['sellercountry'])) {
-					$thirdparty->country_code = $sellerInfo['sellercountry'];
-				}
-				if (empty($thirdparty->email) && !empty($sellerInfo['sellercontactemailaddr'])) {
-					$thirdparty->email = $sellerInfo['sellercontactemailaddr'];
-				}
-				if (empty($thirdparty->phone) && !empty($sellerInfo['sellercontactphoneno'])) {
-					$thirdparty->phone = $sellerInfo['sellercontactphoneno'];
-				}
-				if (empty($thirdparty->fax) && !empty($sellerInfo['sellercontactfaxno'])) {
-					$thirdparty->fax = $sellerInfo['sellercontactfaxno'];
-				}
-				// Set identification numbers if empty
-				if (!empty($sellerInfo['sellerGlobalIds']) && is_array($sellerInfo['sellerGlobalIds'])) {
-					foreach ($sellerInfo['sellerGlobalIds'] as $idScheme => $globalId) {
-						if (!empty($globalId)) {
-							$idprofField = $this->_mapGlobalIdSchemeToIdprof($idScheme, $sellerCountryCode);
-							if (!empty($idprofField) && empty($thirdparty->$idprofField)) {
-								$thirdparty->$idprofField = $einvoicing->removeSpaces($globalId);
+					$thirdparty->zip = $sellerInfo['sellerpostcode'] ?? $thirdparty->zip;
+					$thirdparty->town = $sellerInfo['sellercity'] ?? $thirdparty->town;
+					$thirdparty->country_code = $sellerInfo['sellercountry'] ?? $thirdparty->country_code;
+					$thirdparty->email = $sellerInfo['sellercontactemailaddr'] ?? $thirdparty->email;
+					$thirdparty->phone = $sellerInfo['sellercontactphoneno'] ?? $thirdparty->phone;
+					$thirdparty->fax = $sellerInfo['sellercontactfaxno'] ?? $thirdparty->fax;
+					// Set identification numbers
+					if (!empty($sellerInfo['sellerGlobalIds']) && is_array($sellerInfo['sellerGlobalIds'])) {
+						foreach ($sellerInfo['sellerGlobalIds'] as $idScheme => $globalId) {
+							if (!empty($globalId)) {
+								$idprofField = $this->_mapGlobalIdSchemeToIdprof($idScheme, $sellerCountryCode);
+								if (!empty($idprofField)) {
+									$thirdparty->$idprofField = $einvoicing->removeSpaces($globalId);
+								}
 							}
 						}
 					}
-				}
-				if (!empty($sellerInfo['sellerTaxRegistations']['VA']) && empty($thirdparty->tva_intra)) {
-					$thirdparty->tva_intra = $einvoicing->removeSpaces($sellerInfo['sellerTaxRegistations']['VA']);
-					$thirdparty->tva_assuj = 1;
+					if (!empty($sellerInfo['sellerTaxRegistations']['VA'])) {
+						$thirdparty->tva_intra = $einvoicing->removeSpaces($sellerInfo['sellerTaxRegistations']['VA']);
+						$thirdparty->tva_assuj = 1;
+					}
+				} elseif ($priority === 'dolibarr') { // Fill only empty fields from pdp data
+					dol_syslog(get_class($this) . '::_syncOrCreateThirdpartyFromEInvoiceSeller Keeping existing thirdparty data and fill only empty fields as priority is dolibarr: ' . $thirdpartyId);
+
+					if (empty($thirdparty->name) && !empty($sellerInfo['sellername'])) {
+						$thirdparty->name = $sellerInfo['sellername'];
+					}
+					if (empty($thirdparty->address) && !empty($sellerInfo['sellerlineone'])) {
+						$thirdparty->address = $sellerInfo['sellerlineone'];
+						if (!empty($sellerInfo['sellerlinetwo'])) {
+							$thirdparty->address .= "\n" . $sellerInfo['sellerlinetwo'];
+						}
+						if (!empty($sellerInfo['sellerlinethree'])) {
+							$thirdparty->address .= "\n" . $sellerInfo['sellerlinethree'];
+						}
+					}
+					if (empty($thirdparty->zip) && !empty($sellerInfo['sellerpostcode'])) {
+						$thirdparty->zip = $sellerInfo['sellerpostcode'];
+					}
+					if (empty($thirdparty->town) && !empty($sellerInfo['sellercity'])) {
+						$thirdparty->town = $sellerInfo['sellercity'];
+					}
+					if (empty($thirdparty->country_code) && !empty($sellerInfo['sellercountry'])) {
+						$thirdparty->country_code = $sellerInfo['sellercountry'];
+					}
+					if (empty($thirdparty->email) && !empty($sellerInfo['sellercontactemailaddr'])) {
+						$thirdparty->email = $sellerInfo['sellercontactemailaddr'];
+					}
+					if (empty($thirdparty->phone) && !empty($sellerInfo['sellercontactphoneno'])) {
+						$thirdparty->phone = $sellerInfo['sellercontactphoneno'];
+					}
+					if (empty($thirdparty->fax) && !empty($sellerInfo['sellercontactfaxno'])) {
+						$thirdparty->fax = $sellerInfo['sellercontactfaxno'];
+					}
+					// Set identification numbers if empty
+					if (!empty($sellerInfo['sellerGlobalIds']) && is_array($sellerInfo['sellerGlobalIds'])) {
+						foreach ($sellerInfo['sellerGlobalIds'] as $idScheme => $globalId) {
+							if (!empty($globalId)) {
+								$idprofField = $this->_mapGlobalIdSchemeToIdprof($idScheme, $sellerCountryCode);
+								if (!empty($idprofField) && empty($thirdparty->$idprofField)) {
+									$thirdparty->$idprofField = $einvoicing->removeSpaces($globalId);
+								}
+							}
+						}
+					}
+					if (!empty($sellerInfo['sellerTaxRegistations']['VA']) && empty($thirdparty->tva_intra)) {
+						$thirdparty->tva_intra = $einvoicing->removeSpaces($sellerInfo['sellerTaxRegistations']['VA']);
+						$thirdparty->tva_assuj = 1;
+					}
 				}
 			}
 			// Flag the thirdparty as a vendor if it is not one yet
@@ -936,7 +929,7 @@ trait CommonProtocol
 			$message .= $langs->trans("AutoCreateThirdPartyOffCreateItManually");
 
 			$action = $langs->trans('CreateSupplierManually');
-			$action .= '<a class="butAction small" href="' . dol_escape_htmltag($createUrl) . '" target="_blank">';
+			$action .= '<a class="butAction small smallpaddingimp" href="' . dol_escape_htmltag($createUrl) . '" target="_blank">';
 			$action .= '<i class="fas fa-plus-circle"></i> ';
 			$action .= $langs->trans('CreateSupplier');
 			$action .= '</a>';
@@ -1068,10 +1061,10 @@ trait CommonProtocol
 
 	/**
 	 * Find or create a Dolibarr product based on Einvoice line data
+	 *
 	 * @param array $lineData Array containing invoice line data extracted from XML
 	 * @param string $flowId Flow identifier source of the product. Used for logging purposes.
-	 *
-	 * @return array{res:int, message:string, actioncode:string|null, actionurl:string|null, action:string|null}   Returns array with 'res' (ID of the found or created product, -1 on error) with a 'message' and an optional 'action'.
+	 * @return array{res:int, message:string, actioncode:string|null, action:string|null, actionurl:string|null, actiondata:array<string,mixed>, allactiondata:array<string,array<string,mixed>>}   Returns array with 'res' (ID of the found or created product, -1 on error) with a 'message' and an optional 'action'.
 	 */
 	private function _findOrCreateProductFromEinvoiceLine($lineData, $flowId = '')
 	{
@@ -1176,7 +1169,7 @@ trait CommonProtocol
 
 			$errorDetails = [];
 			$createParams = [];
-			$actiondata = ['ref' => $prodRef, 'supplierref' => $prodSupplierRef, 'name' => $prodName];
+			$allactiondata = [];
 
 			if (!empty($prodRef)) {
 				$errorDetails[] = 'Ref: '.$prodRef;
@@ -1230,13 +1223,16 @@ trait CommonProtocol
 
 			$btnStyle = 'display:inline-block;width:auto;';
 
-			$action = '<div class="marginbottomonly">' . $langs->trans('SuggestedActionsIntro') . '</div>';
+			$action = '<div class="marginbottomonly opacitymedium">' . $langs->trans('SuggestedActionsIntro') . '</div>';
 
-			// First choice: create the product manually
-			$action .= '<a class="button small smallpaddingimp" style="' . $btnStyle . '" href="' . dol_escape_htmltag($createUrl) . '" target="_blank">';
+
+			// First choice: create a new product manually
+			$action .= '<a class="button small smallpaddingimp" style="' . $btnStyle . '" href="' . dol_escape_htmltag($createUrl) . '" target="_blank" title="'.$langs->trans($prodType == 1 ? 'CreateServiceManually' : 'CreateProductManually').'">';
 			$action .= '<i class="fas fa-plus-circle"></i> ';
-			$action .= $langs->trans($prodType == 1 ? 'CreateServiceManually' : 'CreateProductManually');
+			$action .= $langs->trans($prodType == 1 ? 'CreateService' : 'CreateProduct');
 			$action .= '</a>';
+			$actiondata = $createParams;
+			$allactiondata['createproduct'] = array('label' => $langs->trans($prodType == 1 ? 'CreateServiceManually' : 'CreateProductManually'), 'url' => $createUrl, 'actiondata' => $actiondata);
 
 			// Second choice: map the vendor product reference(s) of this flow onto existing Dolibarr products.
 			// This creates the vendor reference (llx_product_fournisseur_price) that the matching uses at step 1,
@@ -1252,15 +1248,19 @@ trait CommonProtocol
 				$action .= '<i class="fas fa-link unsetcolor"></i> ';
 				$action .= $langs->trans('AssociateExistingProductMessage');
 				$action .= '</a>';
+
+				$allactiondata['addsupplierrefprice'] = array('label' => $langs->trans("AssociateExistingProductMessage"), 'url' => $mappingUrl, 'actiondata' => array('socid' => ((int) $vendorId)));
 			}
 
 			// Third choice: set a default product on the vendor thirdparty (used for future imports when no product is found)
 			if (!empty($vendorId)) {
-				$thirdpartyUrl = dol_buildpath('/societe/card.php', 1) . '?socid=' . ((int) $vendorId) . '&action=edit#treinvoicing';
+				$thirdpartyUrl = dol_buildpath('/societe/card.php', 1) . '?socid=' . ((int) $vendorId) . '&action=edit&highlight=routing_product_id#treinvoicing';
 				$action .= '<a class="button small smallpaddingimp" style="' . $btnStyle . '" href="' . dol_escape_htmltag($thirdpartyUrl) . '" target="_blank">';
 				$action .= '<i class="fas fa-star"></i> ';
 				$action .= $langs->trans('SetDefaultProductForThirdparty');
 				$action .= '</a>';
+
+				$allactiondata['setdefaultproduct'] = array('label' => $langs->trans("SetDefaultProductForThirdparty"), 'url' => $thirdpartyUrl, 'actiondata' => array('socid' => ((int) $vendorId)));
 			}
 
 
@@ -1268,9 +1268,10 @@ trait CommonProtocol
 				'res' => -1,
 				'message' => $message,
 				'actioncode' => 'PRODUCT_NOT_FOUND',
-				'actionurl' => $createUrl,
-				'action' => $action,				// label of sentence to make action
-				'actiondata' => $actiondata			// array of paramto use for URL to make action
+				'action' => $action,				// full text suggested to make actions
+				'actionurl' => $createUrl,			// URL of first action
+				'actiondata' => $actiondata,		// Array of param to use for first action
+				'allactiondata' => $allactiondata	// Array with all actions
 			);
 		}
 	}
