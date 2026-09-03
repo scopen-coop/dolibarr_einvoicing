@@ -62,13 +62,13 @@ class FacturXProtocol extends CIIProtocol
 	use CommonProtocol;
 
 	/** @const string Invoice file extension (without the dot, example 'xml') */
-	protected const INVOICE_FILE_EXTENSION = 'pdf';
+	const INVOICE_FILE_EXTENSION = 'pdf';
 
 	/** @const string Generated invoice file name */
-	protected const GENERATED_INVOICE_XML_FILE_NAME = 'factur-x.xml';
+	const GENERATED_INVOICE_XML_FILE_NAME = 'factur-x.xml';
 
 	/** @const string The profile used to generate XML */
-	protected const BUILD_XML_PROFILE = 'EXTENDED';
+	const BUILD_XML_PROFILE = 'EXTENDED';
 
 	/**
 	 * Generate a complete Factur-X invoice file by embedding the XML into a PDF.
@@ -449,7 +449,8 @@ class FacturXProtocol extends CIIProtocol
 
 
 		// --- Read the Factur-X file
-		$document = ZugferdDocumentPdfReader::readAndGuessFromFile($tempFile);
+		// Only the embedded CII is extracted here: getInvoiceDocumentContentFromFile() reads the PDF/A-3
+		// attachment and never looks at the profile the document declares.
 		$embeddedXml = ZugferdDocumentPdfReaderExt::getInvoiceDocumentContentFromFile($tempFile);
 
 		$parsedHeader = [];
@@ -459,6 +460,12 @@ class FacturXProtocol extends CIIProtocol
 			$parsedLines  = $this->parseInvoiceLines($embeddedXml);
 		} else {
 			// Use a duplicate parser (for test or dev tests)
+			// horstoeko/zugferd resolves the profile by matching the guideline URN of the document against
+			// its own table, which has no entry for EXTENDED-CTC-FR - the French profile this very module
+			// emits. Instantiating that reader is therefore only done on the path that actually uses it,
+			// instead of on every received Factur-X (issue #742).
+			$document = ZugferdDocumentPdfReader::readAndGuessFromFile($tempFile);
+
 			$document->getDocumentInformation($documentno, $documenttypecode, $documentdate, $invoiceCurrency, $taxCurrency, $documentname, $documentlanguage, $effectiveSpecifiedPeriod);
 
 			$document->getDocumentSupplyChainEvent(

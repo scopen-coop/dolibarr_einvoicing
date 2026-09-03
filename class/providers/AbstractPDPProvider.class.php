@@ -389,6 +389,7 @@ abstract class AbstractPDPProvider
 	{
 		$identifier = preg_replace('/\s+/', '', (string) $identifier);
 
+		$reg = array();
 		if (preg_match('/^[0-9]{4}:(.+)$/', $identifier, $reg)) {
 			$identifier = $reg[1];
 		}
@@ -459,6 +460,84 @@ abstract class AbstractPDPProvider
 		);
 
 		return $flowResponse;
+	}
+
+	/**
+	 * Pick, among the documents the access point holds for a flow, the first one this module can read.
+	 *
+	 * A flow carries its invoice in several shapes: 'Converted' is the invoice rewritten into the
+	 * syntax configured on the access point account, 'Original' is what the issuer really sent, and
+	 * 'ReadableView' is the human readable copy - which, on an access point that builds it as a
+	 * Factur-X PDF, carries the same data again.
+	 *
+	 * 'Converted' comes first because it is the one that shields the import from an issuer emitting a
+	 * syntax this module does not read - UBL, in particular, belongs to the French socle but has no
+	 * implementation here. But it depends on a setting that lives on the access point account, outside
+	 * Dolibarr: left unset, the platform refuses to produce the document at all; set to a syntax this
+	 * module does not support, it produces one that cannot be imported. Neither case says anything
+	 * about the other documents of the same flow, so they are tried in turn rather than failing the
+	 * flow on the first miss.
+	 *
+	 * @param	string			$flowId				Identifier of the flow to read
+	 * @param	ProtocolManager	$protocolManager	Protocol factory used to recognize the documents
+	 * @return	array{file:?string,protocol:?AbstractProtocol,protocol_name:string,doc_type:string,fetched:int,attempts:string[],client_not_configured:bool}	The importable document, or a null protocol and the reason each shape was rejected
+	 */
+	protected function fetchImportableFlowDocument($flowId, $protocolManager)
+	{
+		$result = array(
+			'file' => null,
+			'protocol' => null,
+			'protocol_name' => '',
+			'doc_type' => '',
+			'fetched' => 0,				// nb of documents the access point did return, whatever their syntax
+			'attempts' => array(),
+			'client_not_configured' => false
+		);
+
+		// EINVOICING_PREFER_ORIGINAL: fetch the issuer's Original document (its Factur-X, which carries
+		// the human-readable PDF) before the Converted one, so the created supplier invoice keeps the PDF.
+		$docTypeOrder = getDolGlobalString('EINVOICING_PREFER_ORIGINAL')
+			? array('Original', 'Converted', 'ReadableView')
+			: array('Converted', 'Original', 'ReadableView');		// Default: First take the Converted (so always in same format defined in AP setup).
+		foreach ($docTypeOrder as $docType) {
+			$flowResponse = $this->fetchFlowData($flowId, $docType, 'get_flow_for_supplier_invoice');
+
+			if ($flowResponse['status_code'] != 200) {
+				if (isset($flowResponse['errorCode']) && $flowResponse['errorCode'] == 'CLIENT_NOT_CONFIGURED') {
+					// The access point has no conversion syntax configured for this client
+					$result['client_not_configured'] = true;
+				}
+				$result['attempts'][] = $docType . ": HTTP " . $flowResponse['status_code'] . (empty($flowResponse['errorMessage']) ? '' : ' - ' . $flowResponse['errorMessage']);
+				continue;
+			}
+
+			$result['fetched']++;
+
+			$content = (string) $flowResponse['response'];
+			$protocolName = $protocolManager->detectProtocolFromContent($content);
+			if (empty($protocolName)) {
+				$result['attempts'][] = $docType . ": unrecognized syntax";
+				continue;
+			}
+
+			$protocol = $protocolManager->getProtocol($protocolName);
+			if (empty($protocol)) {
+				$result['attempts'][] = $docType . ": " . $protocolName . " is not supported";
+				continue;
+			}
+
+			if ($docType != 'Converted') {
+				dol_syslog(__METHOD__ . " No usable 'Converted' document for flowId " . $flowId . " (" . implode(' | ', $result['attempts']) . "), reading the '" . $docType . "' one instead", LOG_WARNING, 0, "_einvoicing");
+			}
+
+			$result['file'] = $content;
+			$result['protocol'] = $protocol;
+			$result['protocol_name'] = $protocolName;
+			$result['doc_type'] = $docType;
+			break;
+		}
+
+		return $result;
 	}
 
 	/**
@@ -535,20 +614,31 @@ abstract class AbstractPDPProvider
 
 		// For backward compatibility with Dolibarr versions < 23.0.0
 		if (version_compare(DOL_VERSION, '23.0.0-alpha', '<')) {
-			dolibarr_set_const($db, $serviceName.'_TOKEN', $accessToken, 'chaine', 0, '', $conf->entity);
+			$forceentity = $conf->entity;
+			if (getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP")) {
+				$forceentity = getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP");
+			}
+
+			dolibarr_set_const($db, $serviceName.'_TOKEN', $accessToken, 'chaine', 0, '', $forceentity);
 
 			if ($refreshToken !== null) {
-				dolibarr_set_const($db, $serviceName.'_REFRESH', $refreshToken, 'chaine', 0, '', $conf->entity);
+				dolibarr_set_const($db, $serviceName.'_REFRESH', $refreshToken, 'chaine', 0, '', $forceentity);
 			}
 
 			if ($expire_at !== null) {
-				dolibarr_set_const($db, $serviceName.'_EXPIRE', $expire_at, 'chaine', 0, '', $conf->entity);
+				dolibarr_set_const($db, $serviceName.'_EXPIRE', $expire_at, 'chaine', 0, '', $forceentity);
 			}
 		} else {
 			// Check if a token already exists for this service
+
+			$forceentity = $conf->entity;
+			if (getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP")) {
+				$forceentity = getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP");
+			}
+
 			$sql_check = "SELECT rowid FROM ".MAIN_DB_PREFIX."oauth_token";
 			$sql_check .= " WHERE service = '".$db->escape($serviceName)."'";
-			$sql_check .= " AND entity = ".((int) $conf->entity);
+			$sql_check .= " AND entity = ".((int) $forceentity);
 
 			$resql = $db->query($sql_check);
 			if (!$resql) {
@@ -567,7 +657,7 @@ abstract class AbstractPDPProvider
 					$sql .= ", expire_at = '".$db->idate($expire_at, 'gmt')."'";
 				}
 				$sql .= " WHERE service = '".$db->escape($serviceName)."'";
-				$sql .= " AND entity = ".((int) $conf->entity);
+				$sql .= " AND entity = ".((int) $forceentity);
 			} else {
 				// --- Insert new token ---
 				$sql  = "INSERT INTO ".MAIN_DB_PREFIX."oauth_token (service, tokenstring";
@@ -580,7 +670,7 @@ abstract class AbstractPDPProvider
 				$sql .= $refreshToken !== null ? ", '".$db->escape($refreshToken)."'" : "";
 				$sql .= ", '".$db->idate($now)."'";
 				$sql .= $expire_at !== null ? ", '".$db->idate($expire_at, 'gmt')."'" : "";
-				$sql .= ", ".(int) $conf->entity.")";
+				$sql .= ", ".(int) $forceentity.")";
 			}
 
 			// Execute SQL
@@ -603,9 +693,10 @@ abstract class AbstractPDPProvider
 	/**
 	 * Retrieve OAuth token for the given PDP service.
 	 *
-	 * @return array{token:string,refresh_token:string,token_expires_at:string}|false   Array with keys 'access_token', 'refresh_token', 'expire_at', or false if not found
+	 * @param	int		$forceentity		0=Use current entity, >0=Use specific entity
+	 * @return 	array{token:string,refresh_token:string,token_expires_at:string}|false   Array with keys 'access_token', 'refresh_token', 'expire_at', or false if not found
 	 */
-	public function fetchOAuthTokenDB()
+	public function fetchOAuthTokenDB($forceentity = 0)
 	{
 		global $conf, $db;
 
@@ -617,6 +708,14 @@ abstract class AbstractPDPProvider
 			$token = getDolGlobalString($serviceName.'_TOKEN');
 			$refresh = getDolGlobalString($serviceName.'_REFRESH');
 			$expire = getDolGlobalString($serviceName.'_EXPIRE');
+
+			if ($forceentity) {
+				require_once DOL_DOCUMENT_ROOT."/core/lib/admin.lib.php";
+
+				$token = dolibarr_get_const($this->db, $serviceName.'_TOKEN', (int) $forceentity);
+				$refresh = dolibarr_get_const($this->db, $serviceName.'_REFRESH', (int) $forceentity);
+				$expire = dolibarr_get_const($this->db, $serviceName.'_EXPIRE', (int) $forceentity);
+			}
 
 			if (empty($token)) {
 				return false;
@@ -633,7 +732,7 @@ abstract class AbstractPDPProvider
 		$sql = "SELECT tokenstring, tokenstring_refresh, expire_at
 				FROM ".MAIN_DB_PREFIX."oauth_token
 				WHERE service = '".$db->escape($serviceName)."'
-				AND entity = ".((int) $conf->entity)." LIMIT 1";
+				AND entity = ".((int) ($forceentity ? $forceentity : $conf->entity))." LIMIT 1";
 
 		$resql = $db->query($sql);
 		if (!$resql) {
@@ -657,10 +756,12 @@ abstract class AbstractPDPProvider
 
 	/**
 	 * Insert or update OAuth token for the given PDP.
+	 * Called by the deleteAccessToken() only, itself called by the setup page only.
 	 *
+	 * @param	int		$forceentity		0=Use current entity, >0=Use specific entity
 	 * @return bool                        True if success, false otherwise
 	 */
-	public function deleteOAuthTokenDB()
+	public function deleteOAuthTokenDB($forceentity = 0)
 	{
 		global $conf, $db;
 
@@ -670,16 +771,17 @@ abstract class AbstractPDPProvider
 
 		if (version_compare(DOL_VERSION, '23.0.0', '<')) {
 			require_once DOL_DOCUMENT_ROOT."/core/lib/admin.lib.php";
-			dolibarr_del_const($this->db, $serviceName.'_TOKEN', $conf->entity);
-			dolibarr_del_const($this->db, $serviceName.'_REFRESH', $conf->entity);
-			dolibarr_del_const($this->db, $serviceName.'_EXPIRE', $conf->entity);
+
+			dolibarr_del_const($this->db, $serviceName.'_TOKEN', (int) ($forceentity ? $forceentity : $conf->entity));
+			dolibarr_del_const($this->db, $serviceName.'_REFRESH', (int) ($forceentity ? $forceentity : $conf->entity));
+			dolibarr_del_const($this->db, $serviceName.'_EXPIRE', (int) ($forceentity ? $forceentity : $conf->entity));
 			return true;
 		}
 
 		// Check if a token already exists for this service
 		$sql_check = "DELETE FROM ".MAIN_DB_PREFIX."oauth_token
 						WHERE service = '".$db->escape($serviceName)."'
-						AND entity = ".((int) $conf->entity);
+						AND entity = ".((int) ($forceentity ? $forceentity : $conf->entity));
 
 		$resql = $db->query($sql_check);
 		if (!$resql) {
@@ -753,7 +855,7 @@ abstract class AbstractPDPProvider
 	 *
 	 * @var array<int,string>
 	 */
-	private const LOGCALL_SENSITIVE_KEYS = array('client_secret', 'access_token', 'refresh_token', 'id_token', 'password');
+	const LOGCALL_SENSITIVE_KEYS = array('client_secret', 'access_token', 'refresh_token', 'id_token', 'password');
 
 	/**
 	 * Redact known sensitive fields (@see LOGCALL_SENSITIVE_KEYS) from a value before it is
@@ -854,7 +956,7 @@ abstract class AbstractPDPProvider
 	 * @param   string                      $requestId  Request-Id header sent with the call, kept to correlate our log with the one of the Access Point
 	 * @return  ?array{id:int,call_id:?string}           Created log identifiers, or null if not logged
 	 */
-	protected function logCall(?string $callType, $resource, $method, $params, $response, $statusCode, string $requestId = '')
+	protected function logCall($callType, $resource, $method, $params, $response, $statusCode, string $requestId = '')
 	{
 		global $conf, $user, $dolibarr_main_db_pass, $dbhistory;
 
@@ -1040,7 +1142,7 @@ abstract class AbstractPDPProvider
 	 *
 	 * @var array<string,string>
 	 */
-	protected const FLOW_PROFILE_BY_GUIDELINE = array(
+	const FLOW_PROFILE_BY_GUIDELINE = array(
 		'urn:factur-x.eu:1p0:basic' => 'Basic',
 		'urn:cen.eu:en16931:2017' => 'CIUS',
 		'urn:cen.eu:en16931:2017#conformant#urn.cpro.gouv.fr:1p0:extended-ctc-fr' => 'Extended-CTC-FR',

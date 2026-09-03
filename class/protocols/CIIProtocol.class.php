@@ -60,16 +60,16 @@ class CIIProtocol extends AbstractProtocol
 	use CommonProtocol;
 
 	/** @const string Invoice file extension (without the dot, example 'xml') */
-	protected const INVOICE_FILE_EXTENSION = 'xml';
+	const INVOICE_FILE_EXTENSION = 'xml';
 
 	/** @const string Generated invoice file name */
-	protected const GENERATED_INVOICE_XML_FILE_NAME = 'einvoice.xml';
+	const GENERATED_INVOICE_XML_FILE_NAME = 'einvoice.xml';
 
 	/** @const string Default profile used to generate XML, overridable with EINVOICING_XML_PROFILE */
-	protected const BUILD_XML_PROFILE = 'EN16931';
+	const BUILD_XML_PROFILE = 'EN16931';
 
 	/** @var string[] Profiles buildXML() knows how to emit, and accepted values of EINVOICING_XML_PROFILE */
-	public const SUPPORTED_XML_PROFILES = ['MINIMUM', 'BASICWL', 'BASIC', 'EN16931', 'EXTENDED', 'EXTENDEDFR'];
+	const SUPPORTED_XML_PROFILES = ['MINIMUM', 'BASICWL', 'BASIC', 'EN16931', 'EXTENDED', 'EXTENDEDFR'];
 
 	/**
 	 * Maximum number of decimals allowed for the unit prices: Item net price (BT-146),
@@ -84,7 +84,7 @@ class CIIProtocol extends AbstractProtocol
 	 *
 	 * @const int
 	 */
-	protected const MAX_DECIMALS_UNIT_PRICE = 6;
+	const MAX_DECIMALS_UNIT_PRICE = 6;
 
 	/**
 	 * Maximum number of decimals allowed for the quantities: Invoiced quantity (BT-129) and
@@ -92,7 +92,7 @@ class CIIProtocol extends AbstractProtocol
 	 *
 	 * @const int
 	 */
-	protected const MAX_DECIMALS_QUANTITY = 4;
+	const MAX_DECIMALS_QUANTITY = 4;
 
 	/**
 	 * @var array<string,string>
@@ -892,12 +892,40 @@ class CIIProtocol extends AbstractProtocol
 		}
 
 		if ($supplierInvoiceId > 0) {
-			$einvoicing->cleanUpTemporaryFiles(); // Clean up temp files to remove retrieved Einvoice file since invoice already exists
+			$return_messages[] = 'Supplier Invoice with reference ' . $parsedHeader['documentno'] . ' already exists';
 
-			// FIXME supplierinvoice already found but may be that documents are not linked (this is done later but only after creating invoice,
-			// may be we should also do it in this case to fix inconsistent data).
+			$supplierInvoice = new FactureFournisseur($db);
+			$supplierInvoice->fetch($supplierInvoiceId);
 
-			return ['res' => $supplierInvoiceId, 'message' => 'Supplier Invoice with reference ' . $parsedHeader['documentno'] . ' already exists'];
+			// Supplier invoice already found but may be that documents are downloaded or were removed
+			// Save documents in supplier invoice attachments if they do not exists yet.
+			if ($tempFile && file_exists($tempFile)) {
+				$res = $this->saveEInvoiceFileToSupplierInvoiceAttachment($supplierInvoice, $tempFile);
+
+				if ($res['res'] < 0) {
+					$return_messages[] = 'Failed to save Einvoice file as attachment: ' . $res['message'];
+				} else {
+					$return_messages[] = 'Einvoice file saved as attachment';
+				}
+			} else {
+				dol_syslog("Temporary 'converted pdf file' not found for attachment", LOG_ERR);
+			}
+
+			// Save readable view file in supplier invoice attachments
+			if ($readableViewFile && $tempFileReadableView && file_exists($tempFileReadableView)) {
+				$readablefileext = 'pdf';	// Usually the extension of file for the readable version is PDF
+				$res = $this->saveEInvoiceFileToSupplierInvoiceAttachment($supplierInvoice, $tempFileReadableView, getDolGlobalString('EINVOICING_PDP', 'PDP'), $readablefileext);
+
+				if ($res['res'] < 0) {
+					$return_messages[] = 'Failed to save readable view file as attachment: ' . $res['message'];
+				} else {
+					$return_messages[] = 'Readable view file saved as attachment';
+				}
+			} else {
+				dol_syslog("Temporary 'readable pdf file' not found for attachment", LOG_ERR);
+			}
+
+			return ['res' => $supplierInvoiceId, 'message' => implode("\n", $return_messages)];
 		}
 
 		// Check if all referenced documents in the invoice exist in Dolibarr for the same supplier, if not return with error since we need them for correct linking in the invoice
@@ -1400,6 +1428,14 @@ class CIIProtocol extends AbstractProtocol
 			}
 
 			$supplierInvoice->lines[] = $line;
+
+			// An invoice line charge (BG-28) is part of BT-131 but has no room in a Dolibarr line, which
+			// holds a quantity, a unit price and a discount and nothing else. It follows its line, the way
+			// it would be keyed in by hand, so the unit price stored stays the one the document gives
+			// (BT-146) and the two together are worth what BT-131 announces. See issue #735.
+			foreach ($this->buildLineChargeLines($parsedLine) as $chargeLine) {
+				$supplierInvoice->lines[] = $chargeLine;
+			}
 		}
 
 		if (!$this->createSupplierInvoiceLinesIntoDatabase($supplierInvoice)) {
@@ -1532,7 +1568,7 @@ class CIIProtocol extends AbstractProtocol
 	 * @param  string|null 	$raw	Raw date string
 	 * @return string|null  YYYY-MM-DD or null if input is null/empty/unparsable
 	 */
-	private function normDate(?string $raw): ?string
+	private function normDate($raw)
 	{
 		if ($raw === null || trim($raw) === '')
 			return null;
@@ -1557,7 +1593,7 @@ class CIIProtocol extends AbstractProtocol
 	 *  @param string|null $v Input string, e.g. "1234.56" or "1 234,56"
 	 *  @return float|null Parsed float or null
 	 */
-	private function toFloat(?string $v): ?float
+	private function toFloat($v)
 	{
 		if ($v === null || $v === '')
 			return null;
@@ -2084,9 +2120,7 @@ class CIIProtocol extends AbstractProtocol
 
 		$textforcomment = 'Einvoice XML generated by';
 		$textforcomment .= ' Dolibarr ' . DOL_VERSION;
-		$textforcomment .= ' Einvoicing ' . trim((string) file_get_contents(__DIR__.'/../../VERSION'));
-		$modulecommit = einvoicingModuleCommit();
-		$textforcomment .= ($modulecommit ? ' ('.$modulecommit.')' : '');
+		$textforcomment .= ' Einvoicing ' . einvoicingModuleStamp();
 		$textforcomment .= ' - ' . dol_print_date(dol_now('gmt'), 'dayhourrfc', 'gmt');
 		$textforcomment .= ($hash_unique_id ? ' - Instance public hash '.$hash_unique_id : '');
 		$comment = $doc->createComment($textforcomment);
@@ -2410,13 +2444,13 @@ class CIIProtocol extends AbstractProtocol
 			}
 
 			// VAT array by rate (tax breakdown)
-			foreach ($invoiceData['taxBreakdown'] as $rate => $vals) {		// $rate is 0, 20.0, ..., $vals is an array
+			foreach ($invoiceData['taxBreakdown'] as $vals) {		// $vals is one VAT breakdown group (BG-23)
 				// Add comment
 				$comment = $doc->createComment('VAT rate: '.$vals['tva_tx'].', VAT src code: '.$vals['vat_src_code'].', ExemptionReasonCode: '.$vals['ExemptionReasonCode']);
 				$settlement->appendChild($comment);
 
 				$settlement->appendChild(
-					$this->buildTaxNode($doc, $rate, $vals, $invoiceData['invoiceCurrency'], $invoiceData['vatDueDateTypeCode'] ?? '') 	// ApplicableTradeTax
+					$this->buildTaxNode($doc, $vals, $invoiceData['invoiceCurrency'], $invoiceData['vatDueDateTypeCode'] ?? '') 	// ApplicableTradeTax
 				);
 			}
 
@@ -2969,13 +3003,12 @@ class CIIProtocol extends AbstractProtocol
 	 * Build a tax node.
 	 *
 	 * @param \DOMDocument 		$doc 		Document to create nodes in
-	 * @param float|string      $rate 		Tax rate
-	 * @param array       		$vals 		Array containing tax values
+	 * @param array       		$vals 		One VAT breakdown group (BG-23): rate, category, exemption and totals
 	 * @param string       		$currency 	Currency code
 	 * @param string       		$dueDateTypeCode 	BT-8, VAT point date code ('5', '29' or '72'), empty to omit it
 	 * @return \DOMElement
 	 */
-	private function buildTaxNode($doc, $rate, $vals, $currency, $dueDateTypeCode = '')
+	private function buildTaxNode($doc, $vals, $currency, $dueDateTypeCode = '')
 	{
 		$tax = $doc->createElement('ram:ApplicableTradeTax');
 
@@ -2999,9 +3032,9 @@ class CIIProtocol extends AbstractProtocol
 			$tax->appendChild($doc->createElement('ram:DueDateTypeCode', htmlspecialchars((string) $dueDateTypeCode)));
 		}
 
-		$floatrate = preg_replace('/\(.*\)/', '', (string) $rate);		// If $rate is 'x.x (CODE)', we change it into 'x.x'
-
-		$tax->appendChild($doc->createElement('ram:RateApplicablePercent', number_format((float) $floatrate, 2, '.', '')));
+		// BT-119 comes from the group itself, never from the key it is filed under: that key identifies
+		// the group (category, rate and exemption reason together) and is not a number.
+		$tax->appendChild($doc->createElement('ram:RateApplicablePercent', number_format((float) $vals['tva_tx'], 2, '.', '')));
 
 		return $tax;
 	}
@@ -3217,8 +3250,14 @@ class CIIProtocol extends AbstractProtocol
 		// exist, the path falls back to the reference of the invoice, and the document is written into a
 		// directory the card never reads - so a received e-invoice was shown nowhere.
 		$folder_part = get_exdir($supplierInvoice->id, 2, 0, 0, $supplierInvoice, 'invoice_supplier');
-		$relative_path = 'fournisseur/facture/' . $folder_part . dol_sanitizeFileName($supplierInvoice->ref);
-		$upload_dir = $conf->fournisseur->dir_output . '/facture/' . $folder_part . dol_sanitizeFileName($supplierInvoice->ref);
+
+		if ($supplierInvoice->entity > 1) {
+			$relative_path = $supplierInvoice->entity.'/fournisseur/facture/' . $folder_part . dol_sanitizeFileName($supplierInvoice->ref);
+			$upload_dir = DOL_DATA_ROOT.'/'.$relative_path;
+		} else {
+			$relative_path = 'fournisseur/facture/' . $folder_part . dol_sanitizeFileName($supplierInvoice->ref);
+			$upload_dir = $conf->fournisseur->dir_output . '/facture/' . $folder_part . dol_sanitizeFileName($supplierInvoice->ref);
+		}
 
 		if (!file_exists($upload_dir)) {
 			if (!dol_mkdir($upload_dir)) {
@@ -3235,43 +3274,15 @@ class CIIProtocol extends AbstractProtocol
 
 		$dest_path = $upload_dir . '/' . $filename;
 
-		// Copy file to destination
-		if (!copy($filePath, $dest_path)) {
-			dol_syslog(__METHOD__ . " Failed to copy file from $filePath to $dest_path", LOG_ERR);
-			return array('res' => -1, 'message' => 'Failed to save attachment file');
-		}
-
-		// Verify file was copied successfully
-		if (!file_exists($dest_path) || filesize($dest_path) === 0) {
-			dol_syslog(__METHOD__ . " File verification failed: $dest_path", LOG_ERR);
-			return array('res' => -1, 'message' => 'File verification failed after copy');
-		}
-
-		// Set proper file permissions
-		chmod($dest_path, 0660);
-		dol_syslog(__METHOD__ . " File saved successfully to: $dest_path", LOG_DEBUG);
-
-		// Register file in database index
-		$res = addFileIntoDatabaseIndex(
-			$upload_dir,
-			$filename,
-			$filename,
-			'generated',
-			0,
-			$supplierInvoice
+		$moreinfo = array(
+			'gen_or_uploaded' => 'imported',
+			'src_object_type' => $supplierInvoice->table_element,
+			'src_object_id' => $supplierInvoice->id,
+			'description' => 'File imported by the einvoicing module'
 		);
-
-		if ($res > 0) {
-			dol_syslog(__METHOD__ . " File attachment registered in database: $dest_path", LOG_DEBUG);
-		} else {
-			dol_syslog(__METHOD__ . " Error registering file attachment in database: $dest_path", LOG_ERR);
-			// File exists but not indexed - not a critical error, continue
-		}
-
-		// Clean up temporary file
-		if (file_exists($filePath)) {
-			unlink($filePath);
-			dol_syslog(__METHOD__ . " Temporary file deleted: $filePath", LOG_DEBUG);
+		$result = dol_move($filePath, $dest_path, '0', 1, 0, 1, $moreinfo);
+		if (!$result) {
+			return array('res' => -1, 'message' => 'Error failed to move file from '.$filePath.' to '.$dest_path);
 		}
 
 		return array('res' => 1, 'message' => 'Attachment saved successfully ' . $dest_path);
@@ -3347,6 +3358,73 @@ class CIIProtocol extends AbstractProtocol
 	}
 
 	/**
+	 * Turn the charges of one received line (BG-28) into the invoice lines that carry them.
+	 *
+	 * EN 16931 mirrors at line level what it has at document level: BG-27, an allowance, and BG-28, a
+	 * charge. A Dolibarr line holds a quantity, a unit price and a discount percentage - it can express
+	 * an allowance and has nowhere to put a charge - so the charge follows its line instead, the way it
+	 * would be keyed in by hand. The unit price stored then stays the one the document gives (BT-146),
+	 * and the two lines together are worth the BT-131 the document announces.
+	 *
+	 * The VAT rate is the one of the line: in CII a line level allowance or charge carries none of its
+	 * own, CII-SR-191 forbidding ram:CategoryTradeTax there.
+	 *
+	 * @param	array<string,mixed>		$parsedLine		One line as parseInvoiceLines() returns it
+	 * @return	SupplierInvoiceLine[]					One line per charge, in the order of the document
+	 */
+	protected function buildLineChargeLines(array $parsedLine)
+	{
+		global $db, $langs;
+
+		if (empty($parsedLine['lineAllowances']) || !is_array($parsedLine['lineAllowances'])) {
+			return array();
+		}
+
+		// The import runs from a cron job as well as from a page, so the language file of the module is
+		// not necessarily loaded: without this the label of a charge would be its own translation key.
+		$langs->load('einvoicing@einvoicing');
+
+		$chargeLines = array();
+
+		foreach ($parsedLine['lineAllowances'] as $allowanceCharge) {
+			// Charges only. The allowances become the discount percentage of the line itself.
+			if (($allowanceCharge['indicator'] ?? '') !== 'true') {
+				continue;
+			}
+
+			$actualAmount = (float) ($allowanceCharge['actualAmount'] ?? 0);
+			if ($actualAmount == 0.0) {
+				continue;
+			}
+
+			$reason = trim((string) ($allowanceCharge['reason'] ?? ''));
+			$reasonCode = trim((string) ($allowanceCharge['reasonCode'] ?? ''));
+			if ($reason === '') {
+				// BR-44 accepts a reason code alone, and a bare code says nothing to whoever reads the
+				// invoice, so it is labelled.
+				$reason = $langs->transnoentitiesnoconv('EInvoicingLineCharge');
+				if ($reasonCode !== '') {
+					$reason .= ' (' . $reasonCode . ')';
+				}
+			}
+			$reason .= ' - ' . $langs->transnoentitiesnoconv('EInvoicingLineChargeOfLine', (string) ($parsedLine['lineid'] ?? '?'));
+
+			$line = new SupplierInvoiceLine($db);
+			$line->desc = $reason;
+			$line->qty = 1;
+			$line->subprice = $actualAmount;
+			$line->tva_tx = (float) ($parsedLine['rateApplicablePercent'] ?? 0);
+			$line->product_type = 1;	// A charge is a service, never a stocked good
+			$line->remise_percent = 0;
+
+			$chargeLines[] = $line;
+		}
+
+		return $chargeLines;
+	}
+
+
+	/**
 	 * Resolve multiple line allowances into a single percentage for Dolibarr.
 	 *
 	 * Dolibarr only supports percentage discounts on lines, so fixed amounts
@@ -3357,13 +3435,19 @@ class CIIProtocol extends AbstractProtocol
 	 * @param float|null $lineTotalAmount BT-131 net line amount (base ht)
 	 * @return false|array{percent: float, base: float, discountAmount: float, priceWithoutDiscount: float}
 	 */
-	protected function resolveLineDiscountPercent(array $lineAllowances, ?float $lineTotalAmount)
+	protected function resolveLineDiscountPercent(array $lineAllowances, $lineTotalAmount)
 	{
-		// Keep only allowances (indicator = "false"), ignore charges (indicator = "true")
+		// Allowances (indicator "false") drive the discount percentage; the charges (indicator "true") are
+		// carried by their own line, but their amount has to be taken out of BT-131 here: the line total
+		// the document gives already contains them, and using it as the after-discount amount would fold
+		// a charge into the base the percentage is applied to (issue #735).
 		$allowances = array();
+		$totalChargeAmount = 0.0;
 		foreach ($lineAllowances as $allowance) {
 			if (($allowance['indicator'] ?? '') === 'false') {
 				$allowances[] = $allowance;
+			} elseif (($allowance['indicator'] ?? '') === 'true') {
+				$totalChargeAmount += (float) ($allowance['actualAmount'] ?? 0);
 			}
 		}
 
@@ -3392,7 +3476,7 @@ class CIIProtocol extends AbstractProtocol
 			'percent'              => round(($totalDiscountAmount / $base) * 100, 4),
 			'base'                 => (float) $base,
 			'discountAmount'       => $totalDiscountAmount,
-			'priceWithoutDiscount' => (float) $lineTotalAmount + $totalDiscountAmount,
+			'priceWithoutDiscount' => (float) $lineTotalAmount - $totalChargeAmount + $totalDiscountAmount,
 		];
 	}
 
