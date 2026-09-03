@@ -1,6 +1,7 @@
 <?php
 /* Copyright (C) 2025       Laurent Destailleur         <eldy@users.sourceforge.net>
  * Copyright (C) 2025       Mohamed DAOUD               <mdaoud@dolicloud.com>
+ * Copyright (C) 2026		Jose Martinez			<jose.martinez@pichinov.com>
  * Copyright (C) 2026		William Mead				<william@m34d.com>
  * Copyright (C) 2026       Frédéric France             <frederic.france@free.fr>
  *
@@ -1589,14 +1590,16 @@ class EInvoicing
 			if (!empty($currentStatusInfo['otherprovider'])) {
 				$resprints .=  '<span class="small">'.img_warning().' '.$langs->trans("WarningEinvoicingInvoiceStatusDifferentProvider", $currentStatusInfo['otherprovider']).'</span><br>';
 			}
-			$resprints .= '<span id="einvoice-status">';
+			$resprints .= '<span id="einvoice-status" class="valignmiddle">';
 			if ($currentStatusInfo['code'] == self::STATUS_NOT_GENERATED) {
 				$resprints .= '<span class="opacitymedium">' . $currentStatusInfo['status'] . '</span>';
 			} else {
 				$resprints .= $currentStatusInfo['status'];
 			}
-			$resprints .= '</span><br>';
-			$resprints .= '<span id="einvoice-info" class="clearboth small opacitymedium">' . dolPrintHTML($info) . '</span>';
+			$resprints .= '</span> ';
+			$resprints .= '<div id="einvoice-info" class="clearboth small opacitymedium valignmiddle inline-block" style="max-width:100%;max-height:6em;overflow:auto;overflow-wrap:anywhere;word-break:break-word;">';
+			$resprints .= $form->textwithpicto('', $info);
+			$resprints .= '</div>';
 		}
 		$resprints .= '</td>';
 		$resprints .= '</tr>';
@@ -1649,7 +1652,7 @@ class EInvoicing
 		// an e-invoice, instead of discovering a routing rejection (fr:213) only after transmission.
 		// Only for live mode, not for test mode (no directory check in test mode)
 		// Only for invoices not yet transmitted
-		if (($object->element == 'facture' || $object->element == 'invoice') && $action != 'create' && getDolGlobalInt('EINVOICING_PRECHECK_DIRECTORY', 1) && !empty(getDolGlobalString('EINVOICING_LIVE')) && empty($currentStatusInfo['transmitted'])) {
+		if (($object->element == 'facture' || $object->element == 'invoice') && $action != 'create' && getDolGlobalInt('EINVOICING_PRECHECK_DIRECTORY') && !empty(getDolGlobalString('EINVOICING_LIVE')) && empty($currentStatusInfo['transmitted'])) {
 			if (!is_object($object->thirdparty ?? null) && !empty($object->socid)) {
 				$object->fetch_thirdparty();
 			}
@@ -1748,7 +1751,7 @@ class EInvoicing
 			} elseif ($currentBuyerReference !== '') {
 				$resprints .= dol_escape_htmltag($currentBuyerReference);
 			} else {
-				$resprints .= '<span class="opacitymedium">' . $langs->trans("NotDefined") . '</span>';
+				//$resprints .= '<span class="opacitymedium">' . $langs->trans("NotDefined") . '</span>';
 			}
 			$resprints .= '</td>';
 			$resprints .= '</tr>';
@@ -2611,9 +2614,16 @@ class EInvoicing
 	 * Gate generation/transmission on the recipient being reachable in the Approved Platforms directory.
 	 *
 	 * Only enforced when EINVOICING_REQUIRE_ROUTABLE_RECIPIENT is on (off by default, opt-in). A recipient
-	 * that is absent from the directory, or present without an active routing line, would be rejected by the
-	 * platform with a routing error (fr:213): blocking generation/sending avoids reaching that error state.
-	 * That option has a second, stricter, value (2) that also blocks a non-conclusive directory answer.
+	 * that is absent from the directory, present without an active routing line, or present without the
+	 * very address this invoice is addressed to, would be rejected by the platform with a routing error
+	 * (fr:213): blocking generation/sending avoids reaching that error state. That option has a second,
+	 * stricter, value (2) that also blocks a non-conclusive directory answer.
+	 *
+	 * What is checked is the electronic address the document will carry (BT-49), read through the same
+	 * getBuyerCommunicationURI() the generation uses, so the gate and the document can never disagree.
+	 * When that address is empty - only reachable with EINVOICING_BLOCK_INVOICE_NO_ROUTING_ID and no
+	 * routing recorded, a configuration the required-information checks already stop - the check falls
+	 * back on any line declared for the SIREN.
 	 *
 	 * Fails open (ok=1) whenever the check cannot be trusted, so it never blocks unexpectedly: option off,
 	 * provider without a directory lookup (status unsupported), directory call error, a directory answer that
@@ -2649,9 +2659,21 @@ class EInvoicing
 			return $res;
 		}
 
-		$dir = $provider->checkRecipientDirectory($siren);
+		// Check the address this very invoice is sent to (BT-49), not merely the SIREN: a recipient can
+		// declare several reception addresses, only the one written into the document decides whether
+		// the transmission is accepted. Same call as getBuyerCommunicationURI() makes at generation, so
+		// what is checked and what is emitted can never drift apart.
+		$routingid = $this->getBuyerCommunicationURI($object->thirdparty, $object);
+
+		$dir = $provider->checkRecipientDirectory($siren, $routingid);
 		$res['status'] = isset($dir['status']) ? $dir['status'] : 'error';
-		if ($res['status'] === 'absent') {
+		if ($res['status'] === 'unknownaddress') {
+			// The address the invoice carries is not declared in the directory for that SIREN. Falling
+			// back on another line that happens to be open would send to an address nobody chose, so
+			// this is a hard stop: whoever recorded the routing identifier owns that decision.
+			$res['ok'] = 0;
+			$res['message'] = $langs->trans('EInvoicingDirectoryAddressNotDeclared', $routingid, $siren);
+		} elseif ($res['status'] === 'absent') {
 			$res['ok'] = 0;
 			$res['message'] = $langs->trans('EInvoicingDirectoryAbsent', $siren);
 		} elseif ($res['status'] === 'inactive') {
