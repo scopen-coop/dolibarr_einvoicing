@@ -657,6 +657,7 @@ class FacturXProtocol extends CIIProtocol
 
 		$socId = $syncSocRes['res'];
 		$return_messages[] = $syncSocRes['message'];
+
 		if ($socId < 0) {
 			$db->rollback();
 			$this->openedTransactions--;

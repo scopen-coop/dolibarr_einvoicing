@@ -1040,6 +1040,9 @@ if ($action == 'confirm_sync' && getDolGlobalString('EINVOICING_PDP') && $confir
 			foreach ($sync_result['actions'] as $tmpactioncode => $tmpactionstodo) {
 				print '<!-- action for code '.$tmpactioncode.' -->';
 				print $tmpactionstodo['action'];
+				print '<br>';
+				print implode("<br>", $sync_result['details']);
+
 				if ($i) {
 					print '<br>';
 				}
