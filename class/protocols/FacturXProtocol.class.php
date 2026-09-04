@@ -62,13 +62,13 @@ class FacturXProtocol extends CIIProtocol
 	use CommonProtocol;
 
 	/** @const string Invoice file extension (without the dot, example 'xml') */
-	protected const INVOICE_FILE_EXTENSION = 'pdf';
+	const INVOICE_FILE_EXTENSION = 'pdf';
 
 	/** @const string Generated invoice file name */
-	protected const GENERATED_INVOICE_XML_FILE_NAME = 'factur-x.xml';
+	const GENERATED_INVOICE_XML_FILE_NAME = 'factur-x.xml';
 
 	/** @const string The profile used to generate XML */
-	protected const BUILD_XML_PROFILE = 'EXTENDED';
+	const BUILD_XML_PROFILE = 'EXTENDED';
 
 	/**
 	 * Generate a complete Factur-X invoice file by embedding the XML into a PDF.
@@ -415,13 +415,13 @@ class FacturXProtocol extends CIIProtocol
 	 * import transaction is opened here too, right after, but closed by that same wrapper.
 	 *
 	 * @param  string			$file                 Raw Factur-X PDF content
-	 * @param  string|null		$ReadableViewFile     Optional readable view (PDP-generated readable PDF)
+	 * @param  string|null		$readableViewFile     Optional readable view (PDP-generated readable PDF)
 	 * @param  string			$flowId               Source flow identifier
 	 * @param  string			$tempFile             Unique working file for the received PDF
 	 * @param  string			$tempFileReadableView Unique working file for the readable view
 	 * @return array{res:int<-1,1>, message:string, action?:string|null}
 	 */
-	protected function doCreateSupplierInvoiceFromSource($file, $ReadableViewFile, $flowId, $tempFile, $tempFileReadableView)
+	protected function doCreateSupplierInvoiceFromSource($file, $readableViewFile, $flowId, $tempFile, $tempFileReadableView)
 	{
 		global $conf, $db, $langs, $user;
 
@@ -435,8 +435,8 @@ class FacturXProtocol extends CIIProtocol
 			return ['res' => -1, 'message' => 'Failed to save EInvoice file to temporary location'];
 		}
 
-		if ($ReadableViewFile) {
-			if (file_put_contents($tempFileReadableView, $ReadableViewFile) === false) {
+		if ($readableViewFile) {
+			if (file_put_contents($tempFileReadableView, $readableViewFile) === false) {
 				return ['res' => -1, 'message' => 'Failed to save readable view file to temporary location'];
 			}
 		}
@@ -449,7 +449,8 @@ class FacturXProtocol extends CIIProtocol
 
 
 		// --- Read the Factur-X file
-		$document = ZugferdDocumentPdfReader::readAndGuessFromFile($tempFile);
+		// Only the embedded CII is extracted here: getInvoiceDocumentContentFromFile() reads the PDF/A-3
+		// attachment and never looks at the profile the document declares.
 		$embeddedXml = ZugferdDocumentPdfReaderExt::getInvoiceDocumentContentFromFile($tempFile);
 
 		$parsedHeader = [];
@@ -459,6 +460,12 @@ class FacturXProtocol extends CIIProtocol
 			$parsedLines  = $this->parseInvoiceLines($embeddedXml);
 		} else {
 			// Use a duplicate parser (for test or dev tests)
+			// horstoeko/zugferd resolves the profile by matching the guideline URN of the document against
+			// its own table, which has no entry for EXTENDED-CTC-FR - the French profile this very module
+			// emits. Instantiating that reader is therefore only done on the path that actually uses it,
+			// instead of on every received Factur-X (issue #742).
+			$document = ZugferdDocumentPdfReader::readAndGuessFromFile($tempFile);
+
 			$document->getDocumentInformation($documentno, $documenttypecode, $documentdate, $invoiceCurrency, $taxCurrency, $documentname, $documentlanguage, $effectiveSpecifiedPeriod);
 
 			$document->getDocumentSupplyChainEvent(
@@ -978,8 +985,9 @@ class FacturXProtocol extends CIIProtocol
 
 
 			// Save readable view file in supplier invoice attachments
-			if ($ReadableViewFile && $tempFileReadableView && file_exists($tempFileReadableView)) {
-				$res = $this->saveEInvoiceFileToSupplierInvoiceAttachment($supplierInvoice, $tempFileReadableView, getDolGlobalString('EINVOICING_PDP', 'PDP'));
+			if ($readableViewFile && $tempFileReadableView && file_exists($tempFileReadableView)) {
+				$readablefileext = 'pdf';	// Usually the extension of file for the readable version is PDF
+				$res = $this->saveEInvoiceFileToSupplierInvoiceAttachment($supplierInvoice, $tempFileReadableView, getDolGlobalString('EINVOICING_PDP', 'PDP'), $readablefileext);
 
 				if ($res['res'] < 0) {
 					$return_messages[] = 'Failed to save readable view file as attachment: ' . $res['message'];

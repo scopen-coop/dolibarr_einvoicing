@@ -1,5 +1,6 @@
 <?php
 /* Copyright (C) 2025		SuperAdmin					<daoud.mouhamed@gmail.com>
+ * Copyright (C) 2026		Jose Martinez				<jose.martinez@pichinov.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -389,7 +390,7 @@ foreach ($object->lines as $line) {
 	// they must not reach getCategoryRate() (would trigger a VATEX exemption error on rate 0 / no code).
 	// Detection is centralized in _isLineFromExternalModule(), which covers both the legacy modSubtotal
 	// module and the native core subtotal feature.
-	$isSubTotalLine = $this->_isLineFromExternalModule($line, $object->element, 'modSubtotal');
+	$isSubTotalLine = $this->_isLineFromExternalModule($line, 'modSubtotal');
 	if ($isSubTotalLine) {
 		continue;
 	}
@@ -430,6 +431,13 @@ foreach ($object->lines as $line) {
 	$categoryVAT = $tmparray['categoryVAT'];
 	$exemptionReason = $tmparray['ExemptionReason'];
 	$exemptionReasonCode = $tmparray['ExemptionReasonCode'];
+
+	// EN16931 / Factur-X: a VAT breakdown group (BG-23) is identified by VAT category code (BT-118),
+	// VAT rate (BT-119) and the exemption reason (BT-120/BT-121) only - NOT by the Dolibarr vat_src_code.
+	// Keying the breakdown by vat_src_code split otherwise identical "S"/rate lines into two
+	// ApplicableTradeTax groups (e.g. products carrying code TVAFR20 vs services without code), which
+	// the PDP rejects (BR-FXEXT-S08b / BR-S-08: duplicate breakdown, taxable base does not reconcile).
+	$vatBreakdownKey = einvoicingVatBreakdownKey($categoryVAT, $line->tva_tx, $exemptionReasonCode, $exemptionReason);
 
 	// if ($line->subprice < 0 || $line->subprice_ttc < 0) {
 	// 	throw new Exception("NEGATIVE_UNIT_PRICE_NOT_ALLOWED: Unit price in lines can't be negative. Try to edit the line with ID " . $line->id);
@@ -491,17 +499,17 @@ foreach ($object->lines as $line) {
 		);
 
 		// Add (or update) VAT rate to $taxBreakdown
-		if (!isset($taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')])) {
-			$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')] = ['tva_tx' => '', 'vat_src_code' => '', 'categoryVAT' => '', 'ExemptionReasonCode' => '', 'ExemptionReason' => '', 'totalHT' => 0, 'totalTVA' => 0];
+		if (!isset($taxBreakdown[$vatBreakdownKey])) {
+			$taxBreakdown[$vatBreakdownKey] = ['tva_tx' => '', 'vat_src_code' => '', 'categoryVAT' => '', 'ExemptionReasonCode' => '', 'ExemptionReason' => '', 'totalHT' => 0, 'totalTVA' => 0];
 		}
-		$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')]['tva_tx'] = $line->tva_tx;
-		$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')]['vat_src_code'] = $line->vat_src_code;
-		$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')]['categoryVAT'] = $categoryVAT;
-		$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')]['ExemptionReasonCode'] = $exemptionReasonCode;
-		$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')]['ExemptionReason'] = $exemptionReason;
+		$taxBreakdown[$vatBreakdownKey]['tva_tx'] = $line->tva_tx;
+		$taxBreakdown[$vatBreakdownKey]['vat_src_code'] = $line->vat_src_code;
+		$taxBreakdown[$vatBreakdownKey]['categoryVAT'] = $categoryVAT;
+		$taxBreakdown[$vatBreakdownKey]['ExemptionReasonCode'] = $exemptionReasonCode;
+		$taxBreakdown[$vatBreakdownKey]['ExemptionReason'] = $exemptionReason;
 
-		$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')]['totalHT']  -= $discount->total_ht;
-		$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')]['totalTVA'] -= $discount->total_tva;
+		$taxBreakdown[$vatBreakdownKey]['totalHT']  -= $discount->total_ht;
+		$taxBreakdown[$vatBreakdownKey]['totalTVA'] -= $discount->total_tva;
 
 
 		$grand_total_ht  -= $discount->total_ht;
@@ -616,17 +624,17 @@ foreach ($object->lines as $line) {
 	}
 
 	// Add (or update) VAT rate to $taxBreakdown
-	if (!isset($taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')])) {
-		$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')] = ['tva_tx' => '', 'vat_src_code' => '', 'categoryVAT' => '', 'ExemptionReasonCode' => '', 'ExemptionReason' => '', 'totalHT' => 0, 'totalTVA' => 0];
+	if (!isset($taxBreakdown[$vatBreakdownKey])) {
+		$taxBreakdown[$vatBreakdownKey] = ['tva_tx' => '', 'vat_src_code' => '', 'categoryVAT' => '', 'ExemptionReasonCode' => '', 'ExemptionReason' => '', 'totalHT' => 0, 'totalTVA' => 0];
 	}
-	$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')]['tva_tx'] = $line->tva_tx;
-	$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')]['vat_src_code'] = $line->vat_src_code;
-	$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')]['categoryVAT'] = $categoryVAT;
-	$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')]['ExemptionReasonCode'] = $exemptionReasonCode;
-	$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')]['ExemptionReason'] = $exemptionReason;
+	$taxBreakdown[$vatBreakdownKey]['tva_tx'] = $line->tva_tx;
+	$taxBreakdown[$vatBreakdownKey]['vat_src_code'] = $line->vat_src_code;
+	$taxBreakdown[$vatBreakdownKey]['categoryVAT'] = $categoryVAT;
+	$taxBreakdown[$vatBreakdownKey]['ExemptionReasonCode'] = $exemptionReasonCode;
+	$taxBreakdown[$vatBreakdownKey]['ExemptionReason'] = $exemptionReason;
 
-	$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')]['totalHT']  += $line_total_ht;
-	$taxBreakdown[$line->tva_tx.($line->vat_src_code ? ' ('.$line->vat_src_code.')' : '')]['totalTVA'] += $line_total_tva;
+	$taxBreakdown[$vatBreakdownKey]['totalHT']  += $line_total_ht;
+	$taxBreakdown[$vatBreakdownKey]['totalTVA'] += $line_total_tva;
 
 	$lines_total_ht  += $line_total_ht;
 	$lines_total_ttc += $line_total_ttc;
@@ -726,6 +734,82 @@ foreach ($object->lines as $line) {
 	$numligne++;
 }
 
+// A situation invoice states, on each of its lines, the cumulative amount of the work done, and the
+// core deducts the situations already invoiced from the header of the invoice
+// (CommonObject::update_price(), block "Situations totals"): llx_facture.total_ttc holds the
+// instalment, which is what the customer owes and what the payment screen expects. The document has
+// to state the same amount, so what the previous situations already asked for is carried as a
+// document level allowance: the lines keep saying what has been done, BT-106 keeps summing them, and
+// BT-107 brings BT-109 (and the VAT breakdown with it) back onto the instalment (issue #674).
+// The amount deducted for a line is the one its predecessor recorded, read from the invoice that
+// carries it - not recomputed here, so the document deducts exactly what was invoiced before, cents
+// included.
+// With INVOICE_USE_SITUATION = 2 each invoice states its own share of the progress, the core deducts
+// nothing and the lines already hold the instalment: there is nothing to deduct.
+if (!empty($object->situation_counter) && $object->situation_counter > 1
+	&& isset($object->type) && $object->type == $object::TYPE_SITUATION
+	&& getDolGlobalInt('INVOICE_USE_SITUATION') == 1) {
+	$previousSituations = array();		// Amounts already invoiced, per VAT rate of the current line
+	foreach ($object->lines as $line) {
+		if (empty($line->fk_prev_id)) {
+			continue;					// A line that appears in this situation was never invoiced before
+		}
+		$sqlprev = "SELECT total_ht, total_tva FROM " . MAIN_DB_PREFIX . "facturedet WHERE rowid = " . ((int) $line->fk_prev_id);
+		$resqlprev = $db->query($sqlprev);
+		if (!$resqlprev) {
+			dol_syslog("EInvoicing cannot read the previous situation line " . $line->fk_prev_id . ": " . $db->lasterror(), LOG_ERR);
+			continue;
+		}
+		$objprev = $db->fetch_object($resqlprev);
+		$db->free($resqlprev);
+		if (empty($objprev) || (empty($objprev->total_ht) && empty($objprev->total_tva))) {
+			continue;
+		}
+
+		// The allowance reduces the basis of a VAT breakdown group of THIS invoice, so it is filed under
+		// the group of the line as it stands now, which is the one the breakdown knows. The key has to be
+		// built exactly the way the breakdown above built it, hence the shared helper: filed under any
+		// other shape, the deduction lands on a group that does not exist and is silently dropped.
+		$tmpcategory = $this->getCategoryRate($line, $mysoc, $object);
+		$keyforvatrate = einvoicingVatBreakdownKey($tmpcategory['categoryVAT'], $line->tva_tx, $tmpcategory['ExemptionReasonCode'], $tmpcategory['ExemptionReason']);
+		if (!isset($taxBreakdown[$keyforvatrate])) {
+			continue;
+		}
+		if (!isset($previousSituations[$keyforvatrate])) {
+			$previousSituations[$keyforvatrate] = array('ht' => 0, 'tva' => 0);
+		}
+		$previousSituations[$keyforvatrate]['ht'] += (float) $objprev->total_ht;
+		$previousSituations[$keyforvatrate]['tva'] += (float) $objprev->total_tva;
+	}
+
+	foreach ($previousSituations as $keyforvatrate => $alreadyinvoiced) {
+		$deduction_ht = (float) price2num($alreadyinvoiced['ht'], 2);
+		$deduction_tva = (float) price2num($alreadyinvoiced['tva'], 2);
+
+		$globalDiscounts[] = array(
+			'value' => $deduction_ht,
+			'reason' => $langs->transnoentitiesnoconv('EInvoicingDeductionOfPreviousSituations'),
+			'taxRate' => (float) $taxBreakdown[$keyforvatrate]['tva_tx'],
+			'categoryVAT' => $taxBreakdown[$keyforvatrate]['categoryVAT'],
+		);
+
+		$taxBreakdown[$keyforvatrate]['totalHT'] -= $deduction_ht;
+		$taxBreakdown[$keyforvatrate]['totalTVA'] -= $deduction_tva;
+
+		$grand_total_ht -= $deduction_ht;
+		$grand_total_tva -= $deduction_tva;
+		$grand_total_ttc -= ($deduction_ht + $deduction_tva);
+	}
+
+	// The deduction is built line by line while the core builds it invoice by invoice: they agree on
+	// every shape met so far, and a gap would mean the document is claiming something the invoice does
+	// not. Say so rather than transmit it silently.
+	if (isset($object->total_ht) && abs($grand_total_ht - (float) $object->total_ht) > 0.01) {
+		dol_syslog("EInvoicing situation invoice " . $object->ref . ": the deduction of the previous situations gives "
+			. $grand_total_ht . " where the invoice records " . $object->total_ht, LOG_WARNING);
+	}
+}
+
 // Rounding convention of the totals.
 // Dolibarr sums the amounts already rounded on each line ("total of round", the default), unless
 // MAIN_ROUNDOFTOTAL_NOT_TOTALOFROUND is set, in which case it rounds the sum instead ("round of
@@ -806,6 +890,12 @@ $deliveryDate = !empty($deliveryDateList)
 $vatOnDebits      = einvoicingVatOnDebits();
 $vatPointDateCode = einvoicingVatPointDateCode($hasProductLine, $hasServiceLine, $object->type == $object::TYPE_DEPOSIT);
 
+// A postal address is one free text field in Dolibarr and three terms in EN 16931 (BT-35/36/162 for
+// the seller, BT-50/51/163 for the buyer). Handing the whole field to the first of them puts raw
+// newlines inside a single element, which the receiving side renders as one run-on line (issue #683).
+$sellerAddressLines = $einvoicing->splitAddressLines($mysoc->address ?? '');
+$buyerAddressLines  = $einvoicing->splitAddressLines($buyerAddress);
+
 // Filling $invoiceData (based on $invoiceTemplate)
 $invoiceData = [
 	// Document part
@@ -847,9 +937,9 @@ $invoiceData = [
 	'sellername'                => $mysoc->name,
 	'sellerids'                 => $myidprof,
 
-	'sellerlineone'             => $mysoc->address      ?? 'ADDRESS EMPTY',
-	'sellerlinetwo'             => "",
-	'sellerlinethree'           => "",
+	'sellerlineone'             => $sellerAddressLines[0] !== '' ? $sellerAddressLines[0] : 'ADDRESS EMPTY',
+	'sellerlinetwo'             => $sellerAddressLines[1],
+	'sellerlinethree'           => $sellerAddressLines[2],
 	'sellerpostcode'            => $mysoc->zip          ?? 'ZIP EMPTY',
 	'sellercity'                => $mysoc->town         ?? 'NO TOWN',
 	'sellercountry'             => $mysoc->country_code ?? 'COUNTRY NOT SET',
@@ -879,9 +969,9 @@ $invoiceData = [
 	'buyername'                 =>  $buyerName ?: 'CUSTOMER',
 	'buyerids'                  => $idprof ?: 'IDPROF',
 
-	'buyerlineone'              => $buyerAddress     ?: 'ADDRESS',
-	'buyerlinetwo'              => "",
-	'buyerlinethree'            => "",
+	'buyerlineone'              => $buyerAddressLines[0] !== '' ? $buyerAddressLines[0] : 'ADDRESS',
+	'buyerlinetwo'              => $buyerAddressLines[1],
+	'buyerlinethree'            => $buyerAddressLines[2],
 	'buyerpostcode'             => $buyerZip         ?: 'ZIP',
 	'buyercity'                 => $buyerTown        ?: 'TOWN',
 	'buyercountry'              => $buyerCountryCode ?: 'COUNTRY',
@@ -962,7 +1052,16 @@ if ($object->mode_reglement_code) {
 // buildShipToTradePartyBuilder function only emits the node when the resolved address
 // actually differs from the buyer (bill-to) address and carries a country code; otherwise it falls
 // back to the buyer party. Nothing resolved => keys stay unset => ship-to = buyer is preserved.
+//
+// A shipping contact is a person, and BT-70 is the name of a party: what the document has to name is
+// the company the delivery is made to. The core says the same, and says it in the shipping frame of
+// the invoice PDF - pdfBuildThirdpartyName() given a Contact returns the name of its thirdparty, and
+// pdf_build_address() reads the address of the contact when it carries one, else the address of the
+// company the contact belongs to (core/lib/pdf.lib.php). einvoicingShipToFromContact() below builds
+// BG-15 the same way, so the XML and the PDF of one invoice no longer name two different things
+// (issue #683).
 $shipAddress = null;
+
 if (method_exists($object, 'liste_contact')) {
 	$shipContacts = $object->liste_contact(-1, 'external', 0, 'SHIPPING');
 	if (is_array($shipContacts) && count($shipContacts) > 0) {
@@ -972,17 +1071,7 @@ if (method_exists($object, 'liste_contact')) {
 		require_once DOL_DOCUMENT_ROOT . '/contact/class/contact.class.php';
 		$shipContact = new Contact($db);
 		if ($shipContact->fetch($shipContacts[0]['id']) > 0) {
-			$shipName = trim($shipContact->getFullName($outputlangs));
-			if ($shipName === '') {
-				$shipName = $object->thirdparty->name;
-			}
-			$shipAddress = array(
-				'name'    => $shipName,
-				'address' => $shipContact->address,
-				'zip'     => $shipContact->zip,
-				'town'    => $shipContact->town,
-				'country' => $shipContact->country_code,
-			);
+			$shipAddress = einvoicingShipToFromContact($shipContact, $object->thirdparty, $outputlangs, $db);
 		}
 	}
 }
@@ -996,17 +1085,7 @@ if ($shipAddress === null && !empty($object->linkedObjectsIds['shipping']) && is
 		if ($tmpexpedition->fetch($expeditionId) > 0 && !empty($tmpexpedition->fk_delivery_address)) {
 			$shipContact = new Contact($db);
 			if ($shipContact->fetch((int) $tmpexpedition->fk_delivery_address) > 0) {
-				$shipName = trim($shipContact->getFullName($outputlangs));
-				if ($shipName === '') {
-					$shipName = $object->thirdparty->name;
-				}
-				$shipAddress = array(
-					'name'    => $shipName,
-					'address' => $shipContact->address,
-					'zip'     => $shipContact->zip,
-					'town'    => $shipContact->town,
-					'country' => $shipContact->country_code,
-				);
+				$shipAddress = einvoicingShipToFromContact($shipContact, $object->thirdparty, $outputlangs, $db);
 				break;
 			}
 		}
@@ -1020,6 +1099,12 @@ if ($shipAddress !== null) {
 		'town'    => $object->thirdparty->town,
 		'country' => $object->thirdparty->country_code,
 	);
+	// Split here rather than in the writer, so the three address terms of a party are decided in one
+	// place for the seller, the buyer and the deliver-to party alike.
+	$shipAddressLines = $einvoicing->splitAddressLines($shipAddress['address']);
+	$shipAddress['lineone']   = $shipAddressLines[0];
+	$shipAddress['linetwo']   = $shipAddressLines[1];
+	$shipAddress['linethree'] = $shipAddressLines[2];
 	$invoiceData['_shipFromContactShip'] = $shipAddress;
 }
 

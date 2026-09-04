@@ -205,7 +205,7 @@ function thirdpartyidprof($object)
  * @param  ?string $original_encoding original encoding
  * @return string
  */
-function removeAllSpaces(?string $str, ?string $original_encoding = null)
+function removeAllSpaces($str, $original_encoding = null)
 {
 	// Tolerate a null identifier (e.g. a party without any professional id): treat it as empty.
 	if ($str === null) {
@@ -415,7 +415,13 @@ if (!method_exists('Societe', 'findNearest')) {
 		$tmpthirdparty = new Societe($db);
 
 		// We try to find the thirdparty with exact matching on all fields
+		// Societe::fetch() answers 1 on a match up to Dolibarr 19, and the row id from 20 on. This
+		// function has to answer an id whatever the core, because that is what its callers book the
+		// document on - taking the raw answer attached it to the thirdparty of id 1 (issue #739).
 		$result = $tmpthirdparty->fetch($rowid, $ref, $ref_ext, $barcode, $idprof1, $idprof2, $idprof3, $idprof4, $idprof5, $idprof6, $email, $ref_alias, $is_client, $is_supplier);
+		if ($result > 0) {
+			return $tmpthirdparty->id;
+		}
 		if ($result != 0) {
 			return $result;
 		}
@@ -424,6 +430,9 @@ if (!method_exists('Societe', 'findNearest')) {
 		dol_syslog("Thirdparty not found with exact match so we try barcode search", LOG_DEBUG);
 		if ($barcode) {
 			$result = $tmpthirdparty->fetch(0, '', '', $barcode, '', '', '', '', '', '', '', '', $is_client, $is_supplier);
+			if ($result > 0) {
+				return $tmpthirdparty->id;
+			}
 			if ($result != 0) {
 				return $result;
 			}
@@ -504,6 +513,9 @@ if (!method_exists('Societe', 'findNearest')) {
 		dol_syslog("Thirdparty not found with profids search so we try email search", LOG_DEBUG);
 		if ($email) {
 			$result = $tmpthirdparty->fetch(0, '', '', '', '', '', '', '', '', '', $email, '', $is_client, $is_supplier);
+			if ($result > 0) {
+				return $tmpthirdparty->id;
+			}
 			if ($result != 0) {
 				return $result;
 			}
@@ -725,6 +737,60 @@ function einvoicingSellerVatRegime($seller)
 }
 
 /**
+ * Build the deliver-to address of a shipping contact, the way the core builds the shipping frame.
+ *
+ * @param	Contact		$shipContact	Contact designated as the delivery point
+ * @param	Societe		$buyer			Thirdparty being invoiced, last resort for the name
+ * @param	Translate	$outputlangs	Language the name is built in
+ * @param	DoliDB		$db				Database handler
+ * @return	array{name:string,address:string,zip:string,town:string,country:string}
+ */
+function einvoicingShipToFromContact($shipContact, $buyer, $outputlangs, $db)
+{
+	require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
+
+	$shipSoc = null;
+	$shipSocId = (int) (!empty($shipContact->socid) ? $shipContact->socid : ($shipContact->fk_soc ?? 0));
+	if ($shipSocId > 0) {
+		$tmpsoc = new Societe($db);
+		if ($tmpsoc->fetch($shipSocId) > 0) {
+			$shipSoc = $tmpsoc;
+		}
+	}
+
+	// The core makes the distinction here and this follows it: pdf_build_address() switches to the
+	// company of the contact only when that company is not the one being invoiced
+	// ($targetcontact->socid != $targetcompany->id).
+	$anothercompany = ($shipSoc !== null && $shipSoc->id != $buyer->id);
+
+	// BT-70 names a party. When the contact belongs to another company, that company is the party the
+	// goods go to, and naming it also spares the document a personal name it has no use for. When the
+	// contact belongs to the company being invoiced, its name is already the BuyerTradeParty name and
+	// would say nothing here, while the label the user gave the contact is what names the delivery
+	// point - so that one is kept.
+	$name = ($anothercompany && !empty($shipSoc->name)) ? $shipSoc->name : trim($shipContact->getFullName($outputlangs));
+	if ($name === '') {
+		$name = ($shipSoc !== null && !empty($shipSoc->name)) ? $shipSoc->name : $buyer->name;
+	}
+
+	// The contact wins when it carries an address of its own - that is a delivery site the user
+	// entered deliberately. With none, the address of its company is the one that means something;
+	// the contact's own empty fields would emit a deliver-to party with no address at all. This is
+	// again what pdf_build_address() does, and a contact of the invoiced company with no address of
+	// its own falls back on that same company, so the deliver-to party then equals the buyer and no
+	// distinct BG-15 is emitted at all.
+	$source = !empty($shipContact->address) ? $shipContact : ($shipSoc !== null ? $shipSoc : $shipContact);
+
+	return array(
+		'name'    => (string) $name,
+		'address' => (string) $source->address,
+		'zip'     => (string) $source->zip,
+		'town'    => (string) $source->town,
+		'country' => (string) ($shipContact->country_code ?: ($shipSoc !== null ? $shipSoc->country_code : '')),
+	);
+}
+
+/**
  * Tax registrations (BT-31 / BT-32) the seller declares, in the shape the two writers consume.
  *
  * One entry, because the two identifiers answer the same question and a document that carried both
@@ -789,6 +855,33 @@ function einvoicingInvoicingPeriodFromLines($billingPeriod)
 	}
 
 	return array('start' => $start, 'end' => $end);
+}
+
+/**
+ * Version of the module, followed by the commit it was built from when that one is known.
+ *
+ * The version alone does not name sources: between two releases the VERSION file does not move,
+ * so every build of a branch answers the same string and a bug report quoting it says nothing
+ * about what actually runs. einvoicingModuleCommit() is what names the sources, and this is the
+ * single place deciding how the two read together, so that the stamp is the same wherever it is
+ * printed - the comment opening a generated XML, the title of a page.
+ *
+ * An installation whose commit cannot be known gets the version alone, with no parentheses,
+ * which is what every caller printed before the commit existed.
+ *
+ * @return	string	Something like "1.4.2 (a6f4d2b)", or "1.4.2" when the commit is unknown
+ */
+function einvoicingModuleStamp()
+{
+	$versionfile = dirname(__DIR__).'/VERSION';
+	$version = (is_readable($versionfile) ? trim((string) file_get_contents($versionfile)) : '');
+	$commit = einvoicingModuleCommit();
+
+	if ($version === '') {
+		return $commit;		// the file is part of the module, but nothing forces a deployment to keep it
+	}
+
+	return $version.($commit !== '' ? ' ('.$commit.')' : '');
 }
 
 /**
@@ -898,4 +991,26 @@ function einvoicingCheckoutCommit($repodir)
 	}
 
 	return (preg_match('/^[0-9a-f]{40,}$/', $commit) ? substr($commit, 0, 7) : '');
+}
+
+/**
+ * Key identifying the VAT breakdown group (BG-23) a line belongs to.
+ *
+ * EN 16931 identifies a breakdown group by its VAT category code (BT-118), its rate (BT-119) and its
+ * exemption reason (BT-120/BT-121), and by nothing else - in particular not by the Dolibarr
+ * vat_src_code, which used to split otherwise identical groups in two and had the platform reject the
+ * document (BR-S-08: the taxable base does not reconcile).
+ *
+ * It exists as a function because the same key is built in more than one place: a breakdown filled
+ * under one shape and read back under another silently loses what was filed under it.
+ *
+ * @param	string		$categoryVAT			VAT category code of the line (BT-118)
+ * @param	float|string	$rate				VAT rate of the line (BT-119)
+ * @param	string		$exemptionReasonCode	Exemption reason code (BT-121), empty when there is none
+ * @param	string		$exemptionReason		Exemption reason text (BT-120), empty when there is none
+ * @return	string								Key of the group in the breakdown accumulator
+ */
+function einvoicingVatBreakdownKey($categoryVAT, $rate, $exemptionReasonCode = '', $exemptionReason = '')
+{
+	return $categoryVAT.'|'.$rate.'|'.$exemptionReasonCode.'|'.$exemptionReason;
 }

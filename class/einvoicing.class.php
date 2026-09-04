@@ -1,6 +1,7 @@
 <?php
 /* Copyright (C) 2025       Laurent Destailleur         <eldy@users.sourceforge.net>
  * Copyright (C) 2025       Mohamed DAOUD               <mdaoud@dolicloud.com>
+ * Copyright (C) 2026		Jose Martinez			<jose.martinez@pichinov.com>
  * Copyright (C) 2026		William Mead				<william@m34d.com>
  * Copyright (C) 2026       Frédéric France             <frederic.france@free.fr>
  *
@@ -84,17 +85,17 @@ class EInvoicing
 
 
 	// Dolibarr internal statuses
-	public const STATUS_UNKNOWN             = 0;		// By default, before the e-invoice has been generated
+	const STATUS_UNKNOWN             = 0;		// By default, before the e-invoice has been generated
 
-	public const STATUS_NOT_GENERATED       = 5;		// To generate then to sync
-	public const STATUS_GENERATED           = 10;		// To sync
-	public const STATUS_AWAITING_VALIDATION = 15;		// Einvoice sent to your AP, but not yet analyzed by your AP
-	public const STATUS_AWAITING_ACK        = 20;		// Einvoice sent to your AP. next step happen when doing sync.
+	const STATUS_NOT_GENERATED       = 5;		// To generate then to sync
+	const STATUS_GENERATED           = 10;		// To sync
+	const STATUS_AWAITING_VALIDATION = 15;		// Einvoice sent to your AP, but not yet analyzed by your AP
+	const STATUS_AWAITING_ACK        = 20;		// Einvoice sent to your AP. next step happen when doing sync.
 
-	public const STATUS_ERROR               = 25;		// Unknown error, should not happe
+	const STATUS_ERROR               = 25;		// Unknown error, should not happe
 
-	public const STATUS_IGNORE_2            = 98;		// Never sync (for another reason than ereporting, not used yet)
-	public const STATUS_IGNORE              = 99;		// Never sync (will be processed by ereporting)
+	const STATUS_IGNORE_2            = 98;		// Never sync (for another reason than ereporting, not used yet)
+	const STATUS_IGNORE              = 99;		// Never sync (will be processed by ereporting)
 
 	/**
 	 * The two codes above, as a list: they keep an invoice out of the e-invoicing scope, it is never
@@ -102,7 +103,7 @@ class EInvoicing
 	 * closing, ...). Grouped here so that adding an "ignore" code is honoured by every caller at
 	 * once, through isIgnoredStatus().
 	 */
-	public const STATUS_IGNORE_CODES = [
+	const STATUS_IGNORE_CODES = [
 		self::STATUS_IGNORE,
 		self::STATUS_IGNORE_2
 	];
@@ -128,100 +129,100 @@ class EInvoicing
 	 * Invoice deposited
 	 * Status sent only by the PDP/PA
 	 */
-	public const STATUS_DEPOSITED = 200;
+	const STATUS_DEPOSITED = 200;
 
 	/**
 	 * Invoice issued
 	 * Status sent only by the PDP/PA
 	 */
-	public const STATUS_ISSUED = 201;
+	const STATUS_ISSUED = 201;
 
 	/**
 	 * Invoice received
 	 * Status sent only by the PDP/PA
 	 */
-	public const STATUS_RECEIVED = 202;
+	const STATUS_RECEIVED = 202;
 
 	/**
 	 * Invoice made available
 	 * Status sent only by the PDP/PA
 	 */
-	public const STATUS_AVAILABLE = 203;
+	const STATUS_AVAILABLE = 203;
 
 	/**
 	 * Invoice taken over
 	 * - Customer invoice: received from the PDP
 	 * - Supplier invoice: can be sent by Dolibarr (optional)
 	 */
-	public const STATUS_TAKEN_OVER = 204;
+	const STATUS_TAKEN_OVER = 204;
 
 	/**
 	 * Invoice approved
 	 * - Customer invoice: received from the PDP
 	 * - Supplier invoice: can be sent by Dolibarr (optional)
 	 */
-	public const STATUS_APPROVED = 205;
+	const STATUS_APPROVED = 205;
 
 	/**
 	 * Invoice partially approved
 	 * - Customer invoice: received from the PDP
 	 * - Supplier invoice: can be sent by Dolibarr (optional)
 	 */
-	public const STATUS_PARTIALLY_APPROVED = 206;
+	const STATUS_PARTIALLY_APPROVED = 206;
 
 	/**
 	 * Invoice disputed
 	 * - Customer invoice: received from the PDP
 	 * - Supplier invoice: can be sent by Dolibarr (optional)
 	 */
-	public const STATUS_DISPUTED = 207;
+	const STATUS_DISPUTED = 207;
 
 	/**
 	 * Invoice suspended
 	 * - Customer invoice: received from the PDP
 	 * - Supplier invoice: can be sent by Dolibarr (optional)
 	 */
-	public const STATUS_SUSPENDED = 208;
+	const STATUS_SUSPENDED = 208;
 
 	/**
 	 * Invoice refused
 	 * - Customer invoice: received from the PDP
 	 * - Supplier invoice: can be sent by Dolibarr (mandatory)
 	 */
-	public const STATUS_REFUSED = 210;
+	const STATUS_REFUSED = 210;
 
 	/**
 	 * Payment transmitted
 	 * - Customer invoice: received from the PDP
 	 * - Supplier invoice: can be sent by Dolibarr (optional, recommended)
 	 */
-	public const STATUS_PAYMENT_SENT = 211;
+	const STATUS_PAYMENT_SENT = 211;
 
 	/**
 	 * Invoice paid
 	 * - Customer invoice: can be sent by Dolibarr (optional, recommended)
 	 * - Supplier invoice: /
 	 */
-	public const STATUS_PAID = 212;
+	const STATUS_PAID = 212;
 
 	/**
 	 * Invoice completed
 	 * - Customer invoice: /
 	 * - Supplier invoice: /
 	 */
-	public const STATUS_COMPLETED = 209;
+	const STATUS_COMPLETED = 209;
 
 	/**
 	 * Invoice rejected (technical)
 	 * - Customer invoice: received from the PDP
 	 * - Supplier invoice: /
 	 */
-	public const STATUS_REJECTED = 213;
+	const STATUS_REJECTED = 213;
 
 	/**
 	 * List of Einvoice status
 	 */
-	public const STATUS_LABEL_KEYS = [
+	const STATUS_LABEL_KEYS = [
 		// Dolibarr
 		self::STATUS_UNKNOWN             => 'EInvStatusUnknown',
 		self::STATUS_IGNORE              => 'EInvStatusDoNotSync',		// To exclude invoice from einvoice sync (ereporting)
@@ -253,7 +254,7 @@ class EInvoicing
 
 
 	// All reasons with their details (Used when sending supplier invoices status: Refused, Disputed, Suspended, Partially Approved)
-	private const REASONS = [
+	const REASONS = [
 		"NON_TRANSMISE" => [
 			"label" => "ReasonRecipientNotConnected",
 			"desc" => "This reason is used ONLY with the \"DEPOSITED\" status to indicate that the invoice could not be transmitted because the recipient (BUYER), although present in the PPF Directory, has no active invoice reception address (i.e., connected to an Approved Platform for reception)."
@@ -437,7 +438,7 @@ class EInvoicing
 	];
 
 	// Codes reasons by status
-	private const REASONS_CODE_FOR_STATUS = [
+	const REASONS_CODE_FOR_STATUS = [
 		self::STATUS_DISPUTED => [
 			"AUTRE",
 			"COORD_BANC_ERR",
@@ -498,7 +499,7 @@ class EInvoicing
 		]
 	];
 
-	public const STATUS_REQUIRING_REASONS = [
+	const STATUS_REQUIRING_REASONS = [
 		self::STATUS_REFUSED,
 		self::STATUS_DISPUTED,
 		self::STATUS_PARTIALLY_APPROVED,
@@ -510,7 +511,7 @@ class EInvoicing
 	 * settling it. "Disputed", "Suspended" and "Refused" are deliberately not here: none of them
 	 * accepts anything.
 	 */
-	public const STATUSES_ACCEPTING_A_DOCUMENT = [
+	const STATUSES_ACCEPTING_A_DOCUMENT = [
 		self::STATUS_APPROVED,
 		self::STATUS_PARTIALLY_APPROVED
 	];
@@ -519,7 +520,7 @@ class EInvoicing
 	 * Name, into llx_einvoicing_extrafields, of the order reference the supplier declared on the
 	 * invoice it sent (BT-13). Kept whether or not it matched a purchase order of Dolibarr.
 	 */
-	public const EXTRAFIELD_BUYER_ORDER_REFERENCE = 'buyer_order_reference';
+	const EXTRAFIELD_BUYER_ORDER_REFERENCE = 'buyer_order_reference';
 
 	/**
 	 * Name, into llx_einvoicing_extrafields, of the buyer reference (BT-10): a reference owned by the
@@ -527,7 +528,7 @@ class EInvoicing
 	 * internal mailbox...). A plain EN 16931 core term, unrelated to the public sector, so it is kept
 	 * per invoice and offered whatever the Chorus Pro option (issue #678).
 	 */
-	public const EXTRAFIELD_BUYER_REFERENCE = 'buyer_reference';
+	const EXTRAFIELD_BUYER_REFERENCE = 'buyer_reference';
 
 	/**
 	 * ISO/IEC 6523 scheme identifier of the French routing code ("code de routage"), the scheme the
@@ -535,7 +536,7 @@ class EInvoicing
 	 * BR-FR-CPRO-13 of XP Z12-012. Not to be confused with 0225 (e-invoice address) nor with 0002 /
 	 * 0009 (SIREN / SIRET), which identify the legal entity itself.
 	 */
-	public const SCHEME_FR_ROUTING_CODE = '0224';
+	const SCHEME_FR_ROUTING_CODE = '0224';
 
 
 	/**
@@ -1046,6 +1047,9 @@ class EInvoicing
 		}
 		if (!empty($baseErrors)) {
 			$res = -1;
+			if ($message) {
+				$message .= '<br>';
+			}
 			$message .= '<b>' . $langs->trans("Error") . '</b>: ' . implode('<br><b>' . $langs->trans("Error") . '</b>: ', $baseErrors);
 		}
 		if (empty($baseErrors) && empty($baseWarnings)) {
@@ -1210,6 +1214,24 @@ class EInvoicing
 	}
 
 	/**
+	 * Tell whether a value returned by the French National Business Registry API is masked.
+	 *
+	 * Units that exercised their right to opposition (art. A123-96 of the French commercial code)
+	 * carry the "partial diffusion" status: they are still returned by the API, but each protected
+	 * field is replaced by the literal string "[NON-DIFFUSIBLE]". Cross-checking such a placeholder
+	 * against the third party record can only ever mismatch, so the field must be skipped instead of
+	 * being reported. Fields that stay public for those units (SIREN, commune, administrative status)
+	 * keep being checked.
+	 *
+	 * @param  string|null $value   Value read from the API response
+	 * @return bool                 True when the field is masked and must not be cross-checked
+	 */
+	private function _isRegistryValueMasked($value)
+	{
+		return is_string($value) && strtoupper(trim($value)) === '[NON-DIFFUSIBLE]';
+	}
+
+	/**
 	 * Check the thirdparty existence and active status via the French National Business Registry API (data.gouv.fr).
 	 * Search is performed by company name; the returned SIREN is then cross-checked against idprof1.
 	 * No authentication required. API rate limit: 7 req/s.
@@ -1269,10 +1291,12 @@ class EInvoicing
 					}
 
 					// Cross-check company name (partial match to handle legal form suffixes and abbreviations)
-					$nomApi      = strtolower(preg_replace('/[^a-z0-9]/i', '', $matchedCompany['nom_complet'] ?? ''));
+					$nameApiRaw  = $matchedCompany['nom_complet'] ?? '';
+					$nomApi      = strtolower(preg_replace('/[^a-z0-9]/i', '', $nameApiRaw));
 					$nomDolibarr = strtolower(preg_replace('/[^a-z0-9]/i', '', $thirdparty->name));
 					if (
-						!empty($nomApi) && !empty($nomDolibarr)
+						!$this->_isRegistryValueMasked($nameApiRaw)
+						&& !empty($nomApi) && !empty($nomDolibarr)
 						&& strpos($nomApi, $nomDolibarr) === false
 						&& strpos($nomDolibarr, $nomApi) === false
 					) {
@@ -1282,14 +1306,21 @@ class EInvoicing
 					// Cross-check ZIP code (objective field, no formatting ambiguity)
 					$zipApi      = trim($matchedCompany['siege']['code_postal'] ?? '');
 					$zipDolibarr = trim($thirdparty->zip ?? '');
-					if (!empty($zipApi) && !empty($zipDolibarr) && $zipApi !== $zipDolibarr) {
+					if (
+						!$this->_isRegistryValueMasked($zipApi)
+						&& !empty($zipApi) && !empty($zipDolibarr) && $zipApi !== $zipDolibarr
+					) {
 						$warnings[] = $langs->trans("FxCheckWarnZIPMismatch", $zipDolibarr, $zipApi);
 					}
 
 					// Cross-check town (case-insensitive, strip accents for robustness)
-					$townApi      = strtolower(trim($matchedCompany['siege']['libelle_commune'] ?? ''));
+					$townApiRaw   = $matchedCompany['siege']['libelle_commune'] ?? '';
+					$townApi      = strtolower(trim($townApiRaw));
 					$townDolibarr = strtolower(trim($thirdparty->town ?? ''));
-					if (!empty($townApi) && !empty($townDolibarr) && $townApi !== $townDolibarr) {
+					if (
+						!$this->_isRegistryValueMasked($townApiRaw)
+						&& !empty($townApi) && !empty($townDolibarr) && $townApi !== $townDolibarr
+					) {
 						$warnings[] = $langs->trans("FxCheckWarnTownMismatch", $thirdparty->town, $matchedCompany['siege']['libelle_commune']);
 					}
 				}
@@ -1537,6 +1568,7 @@ class EInvoicing
 		$resprints .= $langs->trans("einvoiceStatusFieldHelp") . '"></i>';*/
 		$resprints .= '</td>';
 		$resprints .= '<td>';
+		$resprints .= '<!-- data from llx_einvoicing_extlinks -->';
 		if ($action == 'editeinvoicestatus' || $action == 'create') {
 			if ($action != 'create') {
 				$resprints .=  '<form name="seteinvoicestatus" action="' . $_SERVER["PHP_SELF"] . '?id=' . $object->id . '" method="post">';
@@ -1559,14 +1591,16 @@ class EInvoicing
 			if (!empty($currentStatusInfo['otherprovider'])) {
 				$resprints .=  '<span class="small">'.img_warning().' '.$langs->trans("WarningEinvoicingInvoiceStatusDifferentProvider", $currentStatusInfo['otherprovider']).'</span><br>';
 			}
-			$resprints .= '<span id="einvoice-status">';
+			$resprints .= '<span id="einvoice-status" class="valignmiddle">';
 			if ($currentStatusInfo['code'] == self::STATUS_NOT_GENERATED) {
 				$resprints .= '<span class="opacitymedium">' . $currentStatusInfo['status'] . '</span>';
 			} else {
 				$resprints .= $currentStatusInfo['status'];
 			}
-			$resprints .= '</span><br>';
-			$resprints .= '<span id="einvoice-info" class="clearboth small opacitymedium">' . dolPrintHTML($info) . '</span>';
+			$resprints .= '</span> ';
+			$resprints .= '<div id="einvoice-info" class="clearboth small opacitymedium valignmiddle inline-block" style="max-width:100%;max-height:6em;overflow:auto;overflow-wrap:anywhere;word-break:break-word;">';
+			$resprints .= $form->textwithpicto('', $info);
+			$resprints .= '</div>';
 		}
 		$resprints .= '</td>';
 		$resprints .= '</tr>';
@@ -1619,7 +1653,7 @@ class EInvoicing
 		// an e-invoice, instead of discovering a routing rejection (fr:213) only after transmission.
 		// Only for live mode, not for test mode (no directory check in test mode)
 		// Only for invoices not yet transmitted
-		if (($object->element == 'facture' || $object->element == 'invoice') && $action != 'create' && getDolGlobalInt('EINVOICING_PRECHECK_DIRECTORY', 1) && !empty(getDolGlobalString('EINVOICING_LIVE')) && empty($currentStatusInfo['transmitted'])) {
+		if (($object->element == 'facture' || $object->element == 'invoice') && $action != 'create' && getDolGlobalInt('EINVOICING_PRECHECK_DIRECTORY') && !empty(getDolGlobalString('EINVOICING_LIVE')) && empty($currentStatusInfo['transmitted'])) {
 			if (!is_object($object->thirdparty ?? null) && !empty($object->socid)) {
 				$object->fetch_thirdparty();
 			}
@@ -1718,7 +1752,7 @@ class EInvoicing
 			} elseif ($currentBuyerReference !== '') {
 				$resprints .= dol_escape_htmltag($currentBuyerReference);
 			} else {
-				$resprints .= '<span class="opacitymedium">' . $langs->trans("NotDefined") . '</span>';
+				//$resprints .= '<span class="opacitymedium">' . $langs->trans("NotDefined") . '</span>';
 			}
 			$resprints .= '</td>';
 			$resprints .= '</tr>';
@@ -1743,9 +1777,10 @@ class EInvoicing
             <script type="text/javascript">
             (function() {
 				var countCheckInvoiceStatus = 1;
+
                 function checkInvoiceStatus() {
-					console.log(\'checkInvoiceStatus Checking invoice status (try \'+countCheckInvoiceStatus+\') to url '.dol_escape_js($urlajax).'...\');
-                    // alert("Checking invoice status...");
+					console.log(\'checkInvoiceStatus Last LC message for invoice is STATUS_AWAITING_VALIDATION, so we check invoice status (try \'+countCheckInvoiceStatus+\') to url '.dol_escape_js($urlajax).'...\');
+
                     $.get("' . $urlajax . '", {
                         token: "' . currentToken() . '",
                         ref: "' . dol_escape_js($object->ref) . '"
@@ -1770,9 +1805,9 @@ class EInvoicing
                         // Retry only if still awaiting validation
                         if (parseInt(data.code) === ' . self::STATUS_AWAITING_VALIDATION . ') {
 							countCheckInvoiceStatus++;
-							if (countCheckInvoiceStatus <= 5) {
+							if (countCheckInvoiceStatus <= 3) {
                             	setTimeout(checkInvoiceStatus, 5000);
-							} else if (countCheckInvoiceStatus <= 10) {
+							} else if (countCheckInvoiceStatus <= 5) {
                             	setTimeout(checkInvoiceStatus, 10000);
 							}
                         }
@@ -1931,6 +1966,7 @@ class EInvoicing
 			$sql .= " AND lc_validation_status = 'Ok'";
 			$sql .= " ORDER BY rowid DESC LIMIT 1";
 			$resql = $this->db->query($sql);
+			$obj = null;
 			if ($resql && $this->db->num_rows($resql) > 0) {
 				$obj = $this->db->fetch_object($resql);
 				$currentStatus = $this->getStatusLabel($obj->lc_status);
@@ -1939,7 +1975,11 @@ class EInvoicing
 			// Current status
 			$resprints .= '<tr class="treinvoicing_collapseseparator">';
 			$resprints .= '<td class="">' . $langs->trans("einvoicingInvoiceStatus") . '</td>';
-			$resprints .= '<td><span id="einvoice-status">' . $currentStatus . '</span>';
+			$resprints .= '<td><span id="einvoice-status" title="'.($obj ? $obj->lc_status : '').'">' . $currentStatus;
+			if ($obj) {
+				$resprints .= ($obj->lc_status > 200 ? ' <span class="opacitymedium small">('.$langs->trans("EInvoiceCodeShort").' '.$obj->lc_status.')</span>' : '');
+			}
+			$resprints .= '</span>';
 
 			// If current status requires a reason, display it
 			$reasonLabel = '';
@@ -1956,7 +1996,8 @@ class EInvoicing
 
 			// Get last sent status to know if we need to add the JavaScript for real time update of status and to display last sent status validation if it is pending or in error
 			$lastSentStatus = array();
-			$sql = "SELECT lc_status, lc_status_message, lc_validation_status, lc_validation_message FROM " . $this->db->prefix() . "einvoicing_lifecycle_msg";
+			$sql = "SELECT lc_status, lc_status_message, lc_validation_status, lc_validation_message";
+			$sql .= " FROM " . $this->db->prefix() . "einvoicing_lifecycle_msg";
 			$sql .= " WHERE element_type = '" . $this->db->escape($object->element) . "'";
 			$sql .= " AND element_id = " . (int) $object->id;
 			$sql .= " ORDER BY rowid DESC LIMIT 1";
@@ -1999,8 +2040,11 @@ class EInvoicing
 					$resprints .= '
                     <script type="text/javascript">
                     (function() {
+						var countCheckInvoiceStatus = 1;
+
                         function checkSupplierInvoiceStatus() {
-                            console.log("checkSupplierInvoiceStatus Checking invoice status...");
+                            console.log("checkSupplierInvoiceStatus Last LC message for invoice is STATUS_AWAITING_VALIDATION, so we check invoice status (try " + countCheckInvoiceStatus + ") to url '.dol_escape_js($urlajax).'...");
+
                             $.get("' . $urlajax . '", {
                                 token: "' . currentToken() . '",
                                 id: "' . dol_escape_js($object->id) . '"
@@ -2029,13 +2073,18 @@ class EInvoicing
 
                                 // Retry only if still awaiting validation
                                 if (data.statusvalidationlabel === "Pending") {
-                                    setTimeout(checkSupplierInvoiceStatus, 5000);
+									countCheckInvoiceStatus++;
+									if (countCheckInvoiceStatus <= 3) {
+		                            	setTimeout(checkInvoiceStatus, 5000);
+									} else if (countCheckInvoiceStatus <= 5) {
+		                            	setTimeout(checkInvoiceStatus, 10000);
+									}
                                 }
                             }, "json");
                         }
 
                         // First call
-                        console.log("checkSupplierInvoiceStatus Invoice has status pending, so we add a timer to run checkInvoiceStatus in few seconds...");
+                        console.log("checkSupplierInvoiceStatus Invoice has status pending, so we add a timer to run checkInvoiceStatus in 2.5 seconds...");
                         setTimeout(checkSupplierInvoiceStatus, 2500);
 
                     })();
@@ -2419,8 +2468,6 @@ class EInvoicing
 	 */
 	public function fetchLastknownInvoiceStatus($invoiceId = 0, $invoiceRef = null)
 	{
-		global $conf;
-
 		// Default status is unknown until invoice is validated
 		$status = array(
 			'rowid' => 0,
@@ -2589,9 +2636,16 @@ class EInvoicing
 	 * Gate generation/transmission on the recipient being reachable in the Approved Platforms directory.
 	 *
 	 * Only enforced when EINVOICING_REQUIRE_ROUTABLE_RECIPIENT is on (off by default, opt-in). A recipient
-	 * that is absent from the directory, or present without an active routing line, would be rejected by the
-	 * platform with a routing error (fr:213): blocking generation/sending avoids reaching that error state.
-	 * That option has a second, stricter, value (2) that also blocks a non-conclusive directory answer.
+	 * that is absent from the directory, present without an active routing line, or present without the
+	 * very address this invoice is addressed to, would be rejected by the platform with a routing error
+	 * (fr:213): blocking generation/sending avoids reaching that error state. That option has a second,
+	 * stricter, value (2) that also blocks a non-conclusive directory answer.
+	 *
+	 * What is checked is the electronic address the document will carry (BT-49), read through the same
+	 * getBuyerCommunicationURI() the generation uses, so the gate and the document can never disagree.
+	 * When that address is empty - only reachable with EINVOICING_BLOCK_INVOICE_NO_ROUTING_ID and no
+	 * routing recorded, a configuration the required-information checks already stop - the check falls
+	 * back on any line declared for the SIREN.
 	 *
 	 * Fails open (ok=1) whenever the check cannot be trusted, so it never blocks unexpectedly: option off,
 	 * provider without a directory lookup (status unsupported), directory call error, a directory answer that
@@ -2627,9 +2681,21 @@ class EInvoicing
 			return $res;
 		}
 
-		$dir = $provider->checkRecipientDirectory($siren);
+		// Check the address this very invoice is sent to (BT-49), not merely the SIREN: a recipient can
+		// declare several reception addresses, only the one written into the document decides whether
+		// the transmission is accepted. Same call as getBuyerCommunicationURI() makes at generation, so
+		// what is checked and what is emitted can never drift apart.
+		$routingid = $this->getBuyerCommunicationURI($object->thirdparty, $object);
+
+		$dir = $provider->checkRecipientDirectory($siren, $routingid);
 		$res['status'] = isset($dir['status']) ? $dir['status'] : 'error';
-		if ($res['status'] === 'absent') {
+		if ($res['status'] === 'unknownaddress') {
+			// The address the invoice carries is not declared in the directory for that SIREN. Falling
+			// back on another line that happens to be open would send to an address nobody chose, so
+			// this is a hard stop: whoever recorded the routing identifier owns that decision.
+			$res['ok'] = 0;
+			$res['message'] = $langs->trans('EInvoicingDirectoryAddressNotDeclared', $routingid, $siren);
+		} elseif ($res['status'] === 'absent') {
 			$res['ok'] = 0;
 			$res['message'] = $langs->trans('EInvoicingDirectoryAbsent', $siren);
 		} elseif ($res['status'] === 'inactive') {
@@ -2990,8 +3056,8 @@ class EInvoicing
 
 		$db->begin();
 
-		// Check if this entry was the default
-		$sql = "SELECT is_default FROM " . $db->prefix() . "einvoicing_routing";
+		// Check if this entry was the default, and for which type of routing
+		$sql = "SELECT is_default, routing_type FROM " . $db->prefix() . "einvoicing_routing";
 		$sql .= " WHERE rowid = " . (int) $rowid;
 		$resql = $db->query($sql);
 		if (!$resql) {
@@ -3001,6 +3067,7 @@ class EInvoicing
 		}
 		$obj = $db->fetch_object($resql);
 		$wasDefault = $obj ? (int) $obj->is_default : 0;
+		$routingtype = $obj ? $obj->routing_type : '';
 		$db->free($resql);
 
 		$sql = "DELETE FROM " . $db->prefix() . "einvoicing_routing";
@@ -3011,11 +3078,15 @@ class EInvoicing
 			return -1;
 		}
 
-		// Reassign default to oldest remaining entry if needed
+		// Reassign default to oldest remaining entry of the same type if needed. Without the filter on
+		// routing_type, a routing of the other type could take the default and leave the remaining entries
+		// of the deleted type without any, so fetchDefaultRouting() would answer nothing for a thirdparty
+		// that still holds an active routing identifier.
 		if ($wasDefault) {
 			$sql = "UPDATE " . $db->prefix() . "einvoicing_routing";
 			$sql .= " SET is_default = 1";
 			$sql .= " WHERE fk_soc = " . (int) $fk_soc . " AND active = 1";
+			$sql .= " AND routing_type = '" . $db->escape($routingtype) . "'";
 			$sql .= " ORDER BY rowid ASC LIMIT 1";
 			$db->query($sql); // Non-blocking: if no rows remain, nothing to reassign
 		}
@@ -3394,6 +3465,8 @@ class EInvoicing
 		$return = 0;	// By default, no einvoicing.
 
 		if (getDolGlobalInt('EINVOICING_USE_BILLING_CONTACT_AS_BUYER')) {
+			// Critical feature to NEVER use. VERY BAD PRACTICE(and probably not legal, an invoicing organization MUST be an official thirdparty with prof ID).
+			// WILL NEVER BE SUPPORTED.
 			$billingContactIds = $object->getIdContact('external', 'BILLING');
 			if (!empty($billingContactIds) && $object->fetch_contact($billingContactIds[0]) > 0 && is_object($object->contact)) {
 				$billingContact = $object->contact;
@@ -3429,11 +3502,18 @@ class EInvoicing
 			}
 		}
 
-		if ($object->module_source == 'takepos') {			// Force to ignore for all invoices generated from TakePOS
-			// If invoice is generated from TakePOS, we must not make any e-invoice sync.
-			// We will do a Z sync instead from the cash closing feature.
-			$return = getDolGlobalInt('EINVOICING_DEFAULT_EINVOICE_STATUS_FOR_TAKEPOS', self::STATUS_IGNORE);
+		// Force status to "Ignore" for all invoices generated from a POS
+		// If invoice is generated from a POS, we must not make any e-invoice sync.
+		// We will do a Z sync instead from the cash closing feature.
+		$listOfPOSModuleSource = array();
+		if (getDolGlobalString("EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS", "takepos")) {
+			$arrayofposmodules = array_map('trim', explode(',', getDolGlobalString("EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS", "takepos")));
+			$listOfPOSModuleSource = array_merge($listOfPOSModuleSource, $arrayofposmodules);
 		}
+		if (in_array($object->module_source, $listOfPOSModuleSource)) {			// Force status to "Ignore" for all invoices generated from a POS
+			$return = getDolGlobalInt('EINVOICING_DEFAULT_EINVOICE_STATUS_FOR_POS', self::STATUS_IGNORE);
+		}
+
 
 		// Associations and non-VAT-registered entities (tva_assuj = 0) are outside the mandatory
 		// e-invoicing scope per DGFIP guidance: only VAT-registered entities (assujettis) are in scope.
@@ -3720,6 +3800,33 @@ class EInvoicing
 	{
 		// TODO: move this function to class utils
 		return preg_replace('/\\s+/', '', $str);
+	}
+
+	/**
+	 * Split a Dolibarr postal address into the three lines EN 16931 has for it.
+	 *
+	 * Dolibarr keeps a postal address as one free text field where the user separates the lines with
+	 * newlines, while the norm gives an address three separate terms - BT-35/36/162 for the seller,
+	 * BT-50/51/163 for the buyer, BT-75/76/165 for the deliver-to party. Handing the whole field to
+	 * the first of them puts raw newlines inside a single element, which the receiving side renders
+	 * as one run-on line (issue #683).
+	 *
+	 * Nothing is dropped: the norm stops at three lines, so a fourth and beyond join the third,
+	 * separated by a comma, rather than disappearing from the document.
+	 *
+	 * @param	string	$address	Address as Dolibarr stores it, lines separated by newlines
+	 * @return	string[]			Exactly three lines, empty strings when the address has fewer
+	 */
+	public function splitAddressLines($address)
+	{
+		$lines = preg_split('/\R/', (string) $address);
+		$lines = array_values(array_filter(array_map('trim', $lines), 'strlen'));
+
+		if (count($lines) > 3) {
+			$lines = array_merge(array_slice($lines, 0, 2), array(implode(', ', array_slice($lines, 2))));
+		}
+
+		return array_pad($lines, 3, '');
 	}
 
 	/**

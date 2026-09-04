@@ -1,20 +1,28 @@
 # CHANGELOG MODULE EINVOICING FOR [DOLIBARR ERP CRM](https://www.dolibarr.org)
 
+## 1.2.0
+
+NEW: When using SuperPDP, a PDF is also retreived in addition to the .xml einvoice file. 
+
+
+
 ## 1.1.0
 
-NEW: A module option imports every supplier-invoice line received from the Access Point as a free
-description line, whether or not a product matches in the database. Product matching and automatic
-product creation are skipped. The existing option still imports as a free line only when no product
-is found.
-
-NEW: A draft supplier invoice received from the Access Point can have its free lines replaced by
-lines taken from supplier orders of the same vendor. The option EINVOICING_IMPORT_SUPPLIER_ORDER_LINES
-imports the e-invoice lines as free description lines, then offers a button and a tab listing the
-order lines (filterable and sortable: order ref, product, quantity, project, unit price, total excl.
-VAT, plus extrafields such as a Wrike project or an analytical code when they exist). Importing the
-selected lines deletes the free lines and copies the order lines the same way as when a supplier
-invoice is created from a supplier order. Validation of that draft is refused until the invoice
-totals (excl. VAT, VAT, incl. VAT) match the amounts transmitted by the Access Point.
+NEW: The VAT category of a line (BT-151) is read from the VAT code the line carries, so a document can
+declare a regime the rate alone cannot tell. A rate of zero covers zero rated, exempt, reverse charge,
+export and intra-community supplies alike, and the generator used to answer exempt for all of them: a
+building trade subcontractor, whose customer declares the tax under article 283, 2 nonies of the CGI,
+could not issue a single valid invoice. The category is the segment of the code before its first dash -
+'AE' and 'AE-IC' are both reverse charge - and the exemption reason (BT-120) is the note of the
+dictionary line, so two regimes sharing one category quote the article that is theirs. The exemption
+reason code (BT-121) is the one of the dictionary line where the core holds it, the standard code of the
+regime otherwise - VATEX-FR-AE for a French seller under the reverse charge, which names article 283
+of the CGI the invoice has to quote, VATEX-EU-AE for the sellers of the other member states, and
+VATEX-EU-G and VATEX-EU-IC for exports and intra-community supplies. A code the dictionary does not translate is
+still refused by name rather than answered with a guess, a reverse charge code on a taxed rate is
+reported on BR-AE-05 instead of building a document the platform rejects, and a reverse charge line that
+names only one of the two parties is reported on BR-AE-02 or BR-AE-03. Lines with no code, and taxed
+lines, are built exactly as before.
 
 FIX: The remote information of the SuperPDP setup page now describes the e-invoice address the module
 really sends with. A company can hold several entries in the French directory at once - one per

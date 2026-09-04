@@ -83,6 +83,7 @@ include_once __DIR__.'/class/protocols/ProtocolManager.class.php';
 // page calls both, so it would fatal below the version the module declares it supports. Both are
 // backported in compat/functions.lib.php, and that is all this page needs from the two libraries.
 include_once __DIR__.'/compat/functions.lib.php';
+include_once __DIR__.'/lib/einvoicing.lib.php';
 include_once __DIR__.'/class/document.class.php';
 // for other modules
 //dol_include_once('/othermodule/class/otherobject.class.php');
@@ -272,8 +273,8 @@ if (!$permissiontoread) {
 // AbstractProtocol::cleanupIncomingTempFiles(): one per protocol (einvoice.xml for a CII flow,
 // einvoice.pdf for a Factur-X one), plus the readable view when the platform provided one.
 $protocolManager = new ProtocolManager($db);
-$diagFileNames = $protocolManager->getIncomingDiagnosticFileNames();
-$diagReadableFileName = AbstractProtocol::INCOMING_DIAGNOSTIC_READABLE_FILE_NAME;
+$diagFileNames = $protocolManager->getIncomingDiagnosticFileNames();				// Return the document Converted in format of the default Protocol.
+$diagReadableFileName = AbstractProtocol::INCOMING_DIAGNOSTIC_READABLE_FILE_NAME;	// Return the document Readable (a generated PDF)
 
 
 
@@ -611,22 +612,17 @@ if ($num == 1 && getDolGlobalInt('MAIN_SEARCH_DIRECT_OPEN_IF_ONLY_ONE') && $sear
 // Output page
 // --------------------------------------------------------------------
 
-llxHeader('', $title, $help_url, '', 0, 0, $morejs, $morecss, '', 'mod-einvoicing page-list bodyforlist');	// Can use also classforhorizontalscrolloftabs instead of bodyforlist for a horizontal scroll in the table instead of page
+// The version alone does not name sources between two releases, so the commit the module was
+// built from is stamped next to it, exactly as the comment opening a generated XML does.
+llxHeader('', $title.' '.einvoicingModuleStamp(), $help_url, '', 0, 0, $morejs, $morecss, '', 'mod-einvoicing page-list bodyforlist');	// Can use also classforhorizontalscrolloftabs instead of bodyforlist for a horizontal scroll in the table instead of page
 
-// Example : Adding jquery code
-// print '<script type="text/javascript">
-// jQuery(document).ready(function() {
-// 	function init_myfunc()
-// 	{
-// 		jQuery("#myid").removeAttr(\'disabled\');
-// 		jQuery("#myid").attr(\'disabled\',\'disabled\');
-// 	}
-// 	init_myfunc();
-// 	jQuery("#mybutton").click(function() {
-// 		init_myfunc();
-// 	});
-// });
-// </script>';
+if (getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP") && $conf->entity != getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP")) {
+	print $langs->trans("EInvoicingInfoManagedByMasterSetup", getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP"));
+
+	llxFooter();
+	exit;
+}
+
 
 $arrayofselected = is_array($toselect) ? $toselect : array();
 
@@ -723,7 +719,6 @@ if ($provider) {
 
 print_barre_liste($title, $page, $_SERVER["PHP_SELF"], $param, $sortfield, $sortorder, $massactionbutton, $num, $nbtotalofrecords, $object->picto, 0, $newcardbutton, '', $limit, 0, 0, 1);
 
-
 // Add code for pre mass action (confirmation or email presend form)
 $topicmail = "SendDocumentRef";
 $modelmail = "document";
@@ -812,20 +807,20 @@ foreach ($diagFileNames as $f) {
 }
 
 if ($diagFileName) {
-	$urlOriginalFile = DOL_URL_ROOT . '/document.php?modulepart=einvoicing&file=' . urlencode('temp/' . $diagFileName);
+	$urlConvertedFile = DOL_URL_ROOT . '/document.php?modulepart=einvoicing&file=' . urlencode('temp/' . $diagFileName);
 
 	$last_supplier_invoice_error = '<span class="opacitylowx">'.img_picto('', 'times', 'class="pictofixedwidth"');
 	$last_supplier_invoice_error .= ' ' . $langs->trans("LastSupplierInvoiceCouldNotBeProcessed");
 	$last_supplier_invoice_error .= '<i class="fas fa-info-circle em088 opacityhigh classfortooltip" title="'. $langs->trans("LastSupplierInvoiceCouldNotBeProcessedInfo") .'"></i>';
 	$last_supplier_invoice_error .= ' : </span>';
-	$last_supplier_invoice_error .= '<a href="'.$urlOriginalFile.'">' . $langs->trans("facturXDownloadOriginal") . ' ' . img_picto('', 'download', 'class="pictofixedwidth"') . '</a>';
+	$last_supplier_invoice_error .= '<a href="'.$urlConvertedFile.'" target="_blank">' . $langs->trans("DocDownloadConverted") . ' ' . img_picto('', 'download', 'class="pictofixedwidth"') . '</a>';
 
 	// The readable view is only stored when the platform provided one with the flow
 	if (file_exists($conf->einvoicing->dir_temp . '/' . $diagReadableFileName)) {
-		$urlConvertedFile = DOL_URL_ROOT . '/document.php?modulepart=einvoicing&file=' . urlencode('temp/' . $diagReadableFileName);
+		$urlReadableFile = DOL_URL_ROOT . '/document.php?modulepart=einvoicing&file=' . urlencode('temp/' . $diagReadableFileName);
 
 		$last_supplier_invoice_error .= ' <span class="opacitylow">|</span> ';
-		$last_supplier_invoice_error .= '<a href="'.$urlConvertedFile.'">' . $langs->trans("facturXDownloadConverted") . ' ' . img_picto('', 'download', 'class="pictofixedwidth"') . '</a>';
+		$last_supplier_invoice_error .= '<a href="'.$urlReadableFile.'" target="_blank">' . $langs->trans("DocDownloadReadable") . ' ' . img_picto('', 'download', 'class="pictofixedwidth"') . '</a>';
 	}
 }
 
@@ -836,8 +831,8 @@ if ($provider) {
 
 	print '<div class="formconsumeproduce" style="padding: 10px;">'."\n";
 
-	print '<div class="div-table-responsive">'; // You can use div-table-responsive-no-min if you don't need reserved height for your table
-	print '<table>'."\n";
+	print '<div class="div-table-responsive-no-min">'; // We need no min to support the selection of fields
+	print '<table class="inline-block valignmiddle marginrightonly">'."\n";
 
 	print '<tr>';
 	print '<td class="syncFormLabel">'.$langs->trans("StartSynchronizationFrom").'</td>';
@@ -877,15 +872,6 @@ if ($provider) {
 
 	print '</td>';
 
-	$rowspan = getDolGlobalInt('EINVOICING_FLOWS_SYNC_CALL_LIMIT') ? 2 : 1;
-	print '<td style="padding-left: 40px; padding-right: 40px"'.($rowspan > 1 ? ' rowspan="'.$rowspan.'"' : '').'>';
-
-	// Button to submit (sync manage both in and update of out invoices)
-	print '<a href="#" id="runSyncBtn" class="butAction small" style="margin: 0;">';
-	print img_picto('', 'refresh', 'class="pictofixedwidth"').' '.$langs->trans("RUN_SYNC");
-	print '</a>'."\n";
-
-	print '</td>';
 	print '</tr>';
 
 	if (getDolGlobalInt('EINVOICING_FLOWS_SYNC_CALL_LIMIT')) {
@@ -901,6 +887,12 @@ if ($provider) {
 	}
 
 	print '</table>'."\n";
+
+	// Button to submit (sync manage both in and update of out invoices)
+	print '<a class="inline-block valignmiddle butAction small margintoponly marginbottomonly" href="#" id="runSyncBtn" style="margin: 0;">';
+	print img_picto('', 'refresh', 'class="pictofixedwidth"').' '.$langs->trans("RUN_SYNC");
+	print '</a>'."\n";
+
 	print '</div>';
 	print '</div>'."\n";
 

@@ -471,14 +471,25 @@ trait CommonProtocol
 		/**
 		 * Scenario to find or create a thirdparty based on E-invoice seller information:
 		 *
-		 * 1. Try to find thirdparty by global IDs (SIREN, VAT number ...)
+		 * 1. Try to find thirdparty by global IDs (SIREN, SIRET ...)
 		 * 1.1 If found, update thirdparty information with provided data
 		 *
-		 * 2. If not found, try to find thirdparty by closest match (findNearest)
+		 * 2. If not found, try to find thirdparty by VAT number
 		 * 2.1 If found one match, update thirdparty information with provided data
 		 * 2.2 If found multiple matches, log warning and return error
 		 *
-		 * 3. If still not found, create new thirdparty with provided data
+		 * 3. If still not found, and ONLY if the hidden option EINVOICING_THIRDPARTIES_MATCH_ON_NAME
+		 *    is set, try the closest match on the descriptive fields (findNearest)
+		 *
+		 * 4. If still not found, create new thirdparty with provided data - or refuse the document
+		 *    when the automatic creation of thirdparties is disabled
+		 *
+		 * By default a received document is attached to a thirdparty by a structured legal identifier
+		 * only. Name, commercial alias, ref_ext and email address are descriptive fields that several
+		 * companies can carry, so matching on them books a supplier invoice on a company that did not
+		 * issue it (issue #739). When the identifier of the seller matches nothing, the seller is
+		 * unknown, and an unknown seller is created rather than guessed - unless an expert turned
+		 * step 3 back on for a base whose thirdparties carry no legal identifier at all.
 		 */
 		global $db, $langs, $user, $conf;
 		require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
@@ -487,8 +498,9 @@ trait CommonProtocol
 		$einvoicing = new EInvoicing($db);
 		$thirdpartyId = -1;
 		// True when the third party was resolved through a structured identifier (SIREN/SIRET/routing/VAT)
-		// and not through a fuzzy name match (findNearest). Used to raise a non-blocking name-mismatch
-		// warning only when identification did not rely on the (descriptive) name itself. See issue #309.
+		// and not through a fuzzy name match (step 3, off unless the hidden option is set). Used to raise
+		// a non-blocking name-mismatch warning only when identification did not rely on the (descriptive)
+		// name itself. See issue #309.
 		$matchedByStructuredIdentifier = false;
 
 		$sellerCountryCode = $sellerInfo['sellercountry'] ?? '';
@@ -574,13 +586,36 @@ trait CommonProtocol
 			}
 		}
 
-		// Step 3: If not found, try to find by findNearest function
-		if ($thirdpartyId < 0) {
+		// Step 3: If not found, try to find by findNearest function.
+		//
+		// A name is not an identity: distinct legal entities collide on it, and under EN 16931 the
+		// seller name (BT-27) and trading name (BT-28) are descriptive fields of the document, never
+		// routing ones. The last stage of findNearest() ORs name and commercial alias, so a thirdparty
+		// merely carrying the seller name collects the received invoice (issue #739). This step is
+		// therefore OFF by default and kept behind the hidden option EINVOICING_THIRDPARTIES_MATCH_ON_NAME
+		// (no entry in the setup page on purpose), for the bases whose thirdparties were recorded
+		// without any legal identifier and which need this fallback. It is enabled knowingly.
+		if ($thirdpartyId < 0 && getDolGlobalString('EINVOICING_THIRDPARTIES_MATCH_ON_NAME')) {
+			// An email address is not an identity either: it can be shared by several third parties, and
+			// a third party that merely carries the sender's address is not necessarily the sender. It is
+			// added to the criteria below only when the (equally hidden) option
+			// EINVOICING_THIRDPARTIES_MATCH_ON_EMAIL is set too, as it was before issue #739.
+			$emailForLooseMatch = '';
+			if (getDolGlobalString('EINVOICING_THIRDPARTIES_MATCH_ON_EMAIL')) {
+				$emailForLooseMatch = $sellerInfo['sellercontactemailaddr'] ?? '';
+			} elseif (!empty($sellerInfo['sellercontactemailaddr'])) {
+				dol_syslog(get_class($this) . '::_syncOrCreateThirdpartyFromEInvoiceSeller Email of the seller is not used as a match criterion (option EINVOICING_THIRDPARTIES_MATCH_ON_EMAIL is off)');
+			}
+
 			if (method_exists($thirdparty, 'findNearest')) {
 				$result = $thirdparty->findNearest(
 					0,
 					$sellerInfo['sellername'] ?? '',
-					$sellerInfo['sellername'] ?? '',
+					// The name is not passed as ref_ext any more: ref_ext is a free field, absent from the
+					// third party card and usually written by whatever import created the record, so a third
+					// party whose ref_ext happens to equal the seller name makes no claim to BE that seller.
+					// The last stage of findNearest() ORs name, alias and ref_ext, so that one coincidence
+					// was enough to attach the received invoice to it (issue #739).
 					'',
 					'',
 					'',
@@ -588,14 +623,19 @@ trait CommonProtocol
 					'',
 					'',
 					'',
-					$sellerInfo['sellercontactemailaddr'] ?? '',
+					'',
+					$emailForLooseMatch,
 					$sellerInfo['sellername'] ?? ''
 				); // TODO: we can add phone, address and vat number to improve matching
 			} else {	// Compat method for old versions
 				$result = findNearest(
 					0,
 					$sellerInfo['sellername'] ?? '',
-					$sellerInfo['sellername'] ?? '',
+					// The name is not passed as ref_ext any more: ref_ext is a free field, absent from the
+					// third party card and usually written by whatever import created the record, so a third
+					// party whose ref_ext happens to equal the seller name makes no claim to BE that seller.
+					// The last stage of findNearest() ORs name, alias and ref_ext, so that one coincidence
+					// was enough to attach the received invoice to it (issue #739).
 					'',
 					'',
 					'',
@@ -603,7 +643,8 @@ trait CommonProtocol
 					'',
 					'',
 					'',
-					$sellerInfo['sellercontactemailaddr'] ?? '',
+					'',
+					$emailForLooseMatch,
 					$sellerInfo['sellername'] ?? ''
 				);
 			}
@@ -613,6 +654,8 @@ trait CommonProtocol
 				$thirdpartyId = $result;
 				dol_syslog(get_class($this) . '::_syncOrCreateThirdpartyFromEInvoiceSeller Found thirdparty by findNearest: ' . $thirdpartyId);
 			}
+		} elseif ($thirdpartyId < 0) {
+			dol_syslog(get_class($this) . '::_syncOrCreateThirdpartyFromEInvoiceSeller Seller not found by its legal identifiers, and the name is not used as a match criterion (hidden option EINVOICING_THIRDPARTIES_MATCH_ON_NAME is off)');
 		}
 
 		// Identifier-based match: raise a NON-BLOCKING warning when the descriptive name carried by the
@@ -640,7 +683,7 @@ trait CommonProtocol
 			}
 		}
 
-		// Step 3: Create or update thirdparty
+		// Step 4: Create or update thirdparty
 
 		//$thirdpartyId = -2; // For testing
 		if ($thirdpartyId > 0) {
@@ -1523,7 +1566,7 @@ trait CommonProtocol
 	 * @param 	CommonInvoiceLine		$line			Invoice line
 	 * @param 	Societe 				$seller			Seller
 	 * @param 	CommonInvoice			$buyer			Invoice the line belongs to, whose ->thirdparty is the buyer. Not a Societe: the single caller passes the invoice, and the buyer is read through it below.
-	 * @return 	array<string,string>					array('categoryVAT' => Category of VAT rate ('S', 'K', 'E', 'G'), 'ExemptionReason' => '', 'ExemptionReasonCode => '')
+	 * @return 	array<string,string>					array('categoryVAT' => Category of VAT rate ('S', 'Z', 'E', 'AE', 'K', 'G'), 'ExemptionReason' => '', 'ExemptionReasonCode => '')
 	 */
 	public function getCategoryRate($line, $seller, $buyer)
 	{
@@ -1646,6 +1689,93 @@ trait CommonProtocol
 				// satisfied by the reason text alone.
 				$exemptionReason = 'VAT not collected';
 			}
+			$exemptionReason = $exemptionReason ?: ($VATEX_CODE_LIST[(string) $exemptionReasonCode]['reason'] ?? $exemptionReasonCode);
+
+			return array('categoryVAT' => $categoryVAT, 'ExemptionReason' => $exemptionReason, 'ExemptionReasonCode' => $exemptionReasonCode);
+		}
+
+		// The VAT code the line carries (vat_src_code, the code column of the VAT dictionary) states the
+		// regime the line is invoiced under, and that regime is what BT-151 asks for. It is read here rather
+		// than deduced from the rate, because a rate of zero covers Z, E, AE, G and K alike: a generator that
+		// guesses from the rate builds a document that is valid and wrong, and BR-AE-05 and its siblings only
+		// catch the guesses that get the rate wrong as well.
+		//
+		// The category is the segment of the code before its first dash, so 'AE' and 'AE-IC' are both reverse
+		// charge and a dictionary can tell apart two regimes that share one category. A code that does not
+		// open on a category the module supports - a code holding a VATEX identifier, or any code an existing
+		// installation already uses - is left to the rules below, unchanged.
+		$declaredCategoryVAT = $this->_getVatCategoryFromVatCode($vat_src_code);
+
+		if ($declaredCategoryVAT !== '' && $declaredCategoryVAT !== 'S') {
+			// BR-AE-05, BR-E-05, BR-G-05, BR-K-05 and BR-Z-05: none of these categories is ever invoiced on a
+			// taxed rate. A line stating one of them at a rate above zero contradicts its own dictionary entry,
+			// and either of the two answers would build a document the Schematron refuses.
+			if ((float) $vat_rate != 0) {
+				throw new Exception('BADVATRATE[BR-'.$declaredCategoryVAT.'-05]: The VAT code \''.$vat_src_code.'\''.($id ? ' on line '.$id : '').' declares the VAT category '.$declaredCategoryVAT.', which EN 16931 only allows on a rate of 0, while the rate of the line is '.$vat_rate.'.');
+			}
+
+			$categoryVAT = $declaredCategoryVAT;
+
+			if ($categoryVAT == 'Z') {
+				// BR-Z-09 and BR-Z-10: a zero rated line is taxed, at zero, and must carry no exemption reason.
+				return array('categoryVAT' => $categoryVAT, 'ExemptionReason' => null, 'ExemptionReasonCode' => null);
+			}
+
+			if ($categoryVAT == 'AE') {
+				// BR-AE-02 and BR-AE-03: a reverse charge line names both parties, since the tax is declared by
+				// the one that receives the supply. The seller answers with its VAT identifier (BT-31) or its tax
+				// registration identifier (BT-32), the buyer with its VAT identifier (BT-48) or its legal
+				// registration identifier (BT-47). Reporting it here names the record to complete; left to the
+				// Schematron it comes back from the platform as a rejected document.
+				$buyerThirdparty = empty($buyer->thirdparty) ? null : $buyer->thirdparty;
+				if (empty($seller->tva_intra) && empty($seller->idprof1)) {
+					throw new Exception('BADVATNUMBER[BR-AE-02]: The VAT number or the professional id of the seller '.$seller->name.' is mandatory when a line is invoiced under the reverse charge (VAT category AE).');
+				}
+				if ($buyerThirdparty !== null && empty($buyerThirdparty->tva_intra) && empty($buyerThirdparty->idprof1)) {
+					throw new Exception('BADVATNUMBER[BR-AE-03]: The VAT number or the legal registration id of the customer '.$buyerThirdparty->name.' is mandatory when a line is invoiced under the reverse charge (VAT category AE).');
+				}
+			}
+
+			$dictionaryEntry = $this->_getVatDictionaryEntry($vat_rate, $vat_src_code);
+
+			// BT-120 is the note of the dictionary line, and nothing else: two regimes may share a category and
+			// quote different articles - subcontracting in the building trade answers to article 283, 2 nonies
+			// of the CGI where an intra-community supply answers to article 283-1 - and only the note of the
+			// line the invoice actually used tells them apart. Hard coding it would state one for the other.
+			$exemptionReason = $dictionaryEntry['note'];
+			$exemptionReasonCode = $dictionaryEntry['einvoice_vatex'];
+
+			if (empty($exemptionReasonCode)) {
+				// Dolibarr 23 and below have no einvoice_vatex column in the dictionary; there the code is the
+				// hidden constant the module already documents for the exempt lines.
+				$exemptionReasonCode = strtoupper(getDolGlobalString('MAIN_VAT_EXEMPTION_CODE_FOR_'.price2num($vat_rate, 2).'_'.strtoupper($vat_src_code)));
+			}
+			if (empty($exemptionReasonCode)) {
+				// The regime itself has a code in the VATEX list for AE, G and K, so those need no setup at all.
+				// E has none: what exempts the line is the article it quotes, which only the dictionary knows.
+				// A French seller quotes the French code of the reverse charge, which names the article the
+				// mention on the invoice has to name - article 283 of the CGI - where VATEX-EU-AE only says
+				// "reverse charge". Sellers of the other member states have that one and nothing more precise.
+				$defaultVatexOfCategory = array(
+					'AE' => 'VATEX-'.($seller->country_code == 'FR' ? 'FR' : 'EU').'-AE',
+					'G' => 'VATEX-EU-G',
+					'K' => 'VATEX-EU-IC',
+				);
+				$exemptionReasonCode = isset($defaultVatexOfCategory[$categoryVAT]) ? $defaultVatexOfCategory[$categoryVAT] : '';
+			}
+
+			if (empty($exemptionReason) && empty($exemptionReasonCode)) {
+				// BR-AE-10, BR-E-10, BR-G-10 and BR-K-10 all ask for one of the two, and the module does not
+				// invent either: it names the code it could not translate, as it does everywhere else.
+				$langs->load("compta");
+				$urltovatdic = DOL_URL_ROOT.'/admin/dict.php?id=10';
+				$errormsg = $langs->trans("UnknownVATEX1", $id, '0', $vat_src_code);
+				$errormsg .= '<br>'.$langs->trans("UnknownVATEX2b", '0', ($vat_src_code ? $vat_src_code : "''"), $urltovatdic, $langs->trans("VATExemptionCode"));
+
+				throw new Exception('MISSINGSETUP: '.$errormsg);
+			}
+
+			// If we have a code but no reason, we try to find the reason in the list of VATEX codes, otherwise we use the code as reason.
 			$exemptionReason = $exemptionReason ?: ($VATEX_CODE_LIST[(string) $exemptionReasonCode]['reason'] ?? $exemptionReasonCode);
 
 			return array('categoryVAT' => $categoryVAT, 'ExemptionReason' => $exemptionReason, 'ExemptionReasonCode' => $exemptionReasonCode);
@@ -1804,23 +1934,83 @@ trait CommonProtocol
 		return array('categoryVAT' => $categoryVAT, 'ExemptionReason' => $exemptionReason, 'ExemptionReasonCode' => $exemptionReasonCode);
 	}
 
+	/**
+	 * Read the EN 16931 VAT category the VAT code of a line declares.
+	 *
+	 * The category is the segment of the code before its first dash. That is a convention of the data,
+	 * not a guess about it: a dictionary that needs to tell apart two regimes sharing one category names
+	 * them 'AE' and 'AE-IC', and both are answered reverse charge without a line of code being written
+	 * for the second one.
+	 *
+	 * @param	string	$vat_src_code	Code of the VAT dictionary line the invoice line was built with
+	 * @return	string					VAT category of EN 16931 (BT-151), '' when the code declares none
+	 */
+	private function _getVatCategoryFromVatCode($vat_src_code)
+	{
+		// The categories of UNTDID 5305 this generator issues documents for. L and M (Canary Islands, Ceuta
+		// and Melilla) and O (outside the scope of VAT) are left out on purpose: each answers to rules of
+		// its own that the rest of the document does not honour yet, so a code opening on one of them is
+		// not taken at its word and keeps going through the rules that follow.
+		$supportedCategories = array('S', 'Z', 'E', 'AE', 'K', 'G');
+
+		$code = strtoupper(trim((string) $vat_src_code));
+		if ($code === '') {
+			return '';
+		}
+
+		$dash = strpos($code, '-');
+		$category = ($dash === false ? $code : substr($code, 0, $dash));
+
+		return in_array($category, $supportedCategories, true) ? $category : '';
+	}
+
+	/**
+	 * Read the VAT dictionary line a rate and a code point to.
+	 *
+	 * @param	float|string	$vat_rate		VAT rate of the invoice line
+	 * @param	string			$vat_src_code	Code of the VAT dictionary line the invoice line was built with
+	 * @return	array{note:string,einvoice_vatex:string}	Empty strings when the dictionary holds no such line
+	 */
+	private function _getVatDictionaryEntry($vat_rate, $vat_src_code)
+	{
+		global $db, $mysoc;
+
+		$entry = array('note' => '', 'einvoice_vatex' => '');
+
+		// The column holding the VATEX code of a dictionary line appeared with Dolibarr 24. Below that
+		// version the note is all the dictionary has to say about the line.
+		$hasVatexColumn = ((float) DOL_VERSION >= 24.0);
+
+		$sql = "SELECT note".($hasVatexColumn ? ", einvoice_vatex" : "")." FROM ".MAIN_DB_PREFIX."c_tva";
+		$sql .= " WHERE taux = ".((float) $vat_rate);
+		$sql .= " AND active = 1";
+		$sql .= " AND fk_pays = ".((int) $mysoc->country_id);
+		$sql .= " AND code = '".$db->escape($vat_src_code)."'";
+		$sql .= " LIMIT 1";
+
+		$resql = $db->query($sql);
+		if ($resql) {
+			$obj = $db->fetch_object($resql);
+			if ($obj) {
+				$entry['note'] = trim((string) $obj->note);
+				$entry['einvoice_vatex'] = ($hasVatexColumn ? strtoupper(trim((string) $obj->einvoice_vatex)) : '');
+			}
+		}
+
+		return $entry;
+	}
+
+
 
 	/**
 	 *    Check line type from external module ?
 	 *
 	 * @param  object $line       line we work on
-	 * @param  string $element    line object element (for special case like shipping)
 	 * @param  string $searchName module name we look for
 	 * @return boolean                        true if the line is a special one and was created by the module we ask for
 	 ************************************************/
-	private function _isLineFromExternalModule($line, $element, $searchName)
+	private function _isLineFromExternalModule($line, $searchName)
 	{
-		global $db;
-		if ($element == 'shipping' || $element == 'delivery') {
-			$fk_origin_line = $line->fk_origin_line;
-			$line = new OrderLine($db);
-			$line->fetch($fk_origin_line);
-		}
 		if ((int) $line->product_type != 9) {
 			return false;
 		}

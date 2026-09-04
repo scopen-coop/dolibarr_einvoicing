@@ -113,12 +113,20 @@ class AllTests
 		$suite->addTestSuite('CIIProfileShapeTest');
 		require_once dirname(__FILE__).'/CIIProtocolTest.php';
 		$suite->addTestSuite('CIIProtocolTest');
+		require_once dirname(__FILE__).'/CIITextEscapingTest.php';
+		$suite->addTestSuite('CIITextEscapingTest');
 		require_once dirname(__FILE__).'/CompatShimReloadTest.php';
 		$suite->addTestSuite('CompatShimReloadTest');
 		require_once dirname(__FILE__).'/EInvoicingSamplesTest.php';
 		$suite->addTestSuite('EInvoicingSamplesTest');
+		require_once dirname(__FILE__).'/HeaderChargeLineTest.php';
+		$suite->addTestSuite('HeaderChargeLineTest');
 		require_once dirname(__FILE__).'/InvoicingPeriodTest.php';
 		$suite->addTestSuite('InvoicingPeriodTest');
+		require_once dirname(__FILE__).'/LineChargeTest.php';
+		$suite->addTestSuite('LineChargeTest');
+		require_once dirname(__FILE__).'/LineWithoutQuantityTest.php';
+		$suite->addTestSuite('LineWithoutQuantityTest');
 		require_once dirname(__FILE__).'/PDPProviderManagerTest.php';
 		$suite->addTestSuite('PDPProviderManagerTest');
 		require_once dirname(__FILE__).'/RecipientDirectoryTest.php';
@@ -137,6 +145,8 @@ class AllTests
 		$suite->addTestSuite('SupplierOrderLineImporterTest');
 		require_once dirname(__FILE__).'/TransmittedLockTest.php';
 		$suite->addTestSuite('TransmittedLockTest');
+		require_once dirname(__FILE__).'/VatCategoryFromVatCodeTest.php';
+		$suite->addTestSuite('VatCategoryFromVatCodeTest');
 		require_once dirname(__FILE__).'/VatPointDateCodeTest.php';
 		$suite->addTestSuite('VatPointDateCodeTest');
 

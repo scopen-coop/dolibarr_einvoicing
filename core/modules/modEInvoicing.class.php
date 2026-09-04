@@ -118,8 +118,17 @@ class modEInvoicing extends DolibarrModules
 			),
 			// Set here all hooks context managed by module. To find available hook context, make a "grep -r '>initHooks(' *" on source code. You can also set hook context to 'all'
 			/* BEGIN MODULEBUILDER HOOKSCONTEXTS */
+			// The module reacts on the invoice, supplier invoice, thirdparty and product cards, on the lists
+			// that carry its columns, on the document generation, and on the REST API (thirdparty merge and
+			// invoice set back to draft go through hooks there too). Contexts are listed one by one on purpose:
+			// 'all' loads this class into every HookManager of the request, including the ones other modules
+			// build for their own contexts.
 			'hooks' => [
-				'all', 'invoicecard'
+				'invoicecard', 'invoicesuppliercard', 'thirdpartycard', 'thirdpartycomm', 'productcard',
+				'invoicelist', 'supplierinvoicelist', 'thirdpartylist', 'societelist', 'productlist',
+				'productservicelist', 'accountancysupplierlist',
+				'pdfgeneration', 'odtgeneration',
+				'api',
 			],
 			/* END MODULEBUILDER HOOKSCONTEXTS */
 			// Set this to 1 if features of module are opened to external users
@@ -141,7 +150,7 @@ class modEInvoicing extends DolibarrModules
 		// A condition to hide module
 		$this->hidden = getDolGlobalInt('MODULE_EINVOICING_DISABLED'); // A condition to disable module;
 		// List of module class names that must be enabled if this module is enabled. Example: array('always'=>array('modModuleToEnable1','modModuleToEnable2'), 'FR'=>array('modModuleToEnableFR')...)
-		$this->depends = array('always'=>array('modFacture', 'modFournisseur'));
+		$this->depends = array('always'=>array('modFacture', 'modFournisseur', 'modProduct'));
 		// List of module class names to disable if this one is disabled. Example: array('modModuleToDisable1', ...)
 		$this->requiredby = array();
 		// List of module class names this module is in conflict with. Example: array('modModuleToDisable1', ...)

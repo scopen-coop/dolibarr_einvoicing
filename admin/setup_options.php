@@ -243,7 +243,7 @@ if (!getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP')) {
 	// sending, and surface it on the invoice card. On by default. A read-only directory lookup: it never blocks.
 	$item = $formSetup->newItem('EINVOICING_PRECHECK_DIRECTORY')->setAsYesNo();
 	$item->helpText = $langs->transnoentities('EINVOICING_PRECHECK_DIRECTORY_HELP');
-	$item->defaultFieldValue = '1';
+	$item->defaultFieldValue = '0';
 	$item->cssClass = 'minwidth500';
 
 	// Setup conf to REQUIRE the recipient to be routable in the directory before generating/sending. Off by
@@ -325,6 +325,15 @@ if (!getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP')) {
 	//$item->enabled = 0;
 	$item->cssClass = 'opacitymedium';
 
+	// Setup conf for PMD - Mention regarding late payment penalties
+	$item = $formSetup->newItem('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS');
+	$item->helpText = $langs->transnoentities('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS_HELP');
+	$item->defaultFieldValue = getDolGlobalString('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS', 'takepos');
+	$item->cssClass = 'minwidth500';
+
+
+	// TODO Move this in the dev setup page ?
+
 	// Allow re-sending / re-editing an invoice already transmitted to the Access Point. Off by default:
 	// a transmitted invoice is immutable (correct it with a credit note / corrective invoice), and re-sending
 	// makes the PA refuse a duplicate. Turn on only to deliberately test PA retry behaviour.
@@ -362,14 +371,16 @@ if (!getDolGlobalString('EINVOICING_DISABLE_SYNC_AP_TO_DOLI')) {
 	$item->defaultFieldValue = '0';
 	$item->cssClass = 'minwidth500';
 	$item->fieldParams['forcereload'] = 1;
+	$item->fieldParams['warningifon'] = 1;
 
 	// Setup conf to import lines as free description lines when no product is found and no default product exist on supplier
-	// TODO This option is exclusive with EINVOICING_PRODUCTS_AUTO_GENERATION so should be disabled if EINVOICING_PRODUCTS_AUTO_GENERATION is on
+	// TODO This option is in conflict with EINVOICING_PRODUCTS_AUTO_GENERATION so should be disabled if EINVOICING_PRODUCTS_AUTO_GENERATION is on
 	if (!getDolGlobalString("EINVOICING_PRODUCTS_AUTO_GENERATION") && !getDolGlobalString("EINVOICING_IMPORT_ALL_AS_FREE_LINES")) {
 		$item = $formSetup->newItem('EINVOICING_IMPORT_AS_FREE_LINES')->setAsYesNo();
 		$item->helpText = $langs->transnoentities('EINVOICING_IMPORT_AS_FREE_LINES_HELP');
 		$item->defaultFieldValue = '0';
 		$item->cssClass = 'minwidth500';
+		$item->fieldParams['warningifon'] = 1;
 	}
 
 	// Import every PA supplier-invoice line as a free description line, even when a product matches

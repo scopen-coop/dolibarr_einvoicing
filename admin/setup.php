@@ -200,7 +200,7 @@ $item = $formSetup->newItem('EINVOICING_LIVE')->setAsYesNo();
 $item->fieldParams['forcereload'] = 1;
 
 // Setup conf to use the invoice billing contact (external BILLING contact) as the XML buyer instead of the invoice thirdparty
-// This option is very dangerous and a vey bad practice. The invoiced thirdparty should always be the thirdparty (if we invoice a parent company,
+// This option is VERY DANGEROUS and a VARY BAD PRACTICE. DO NOT USE IT ! The invoiced thirdparty should always be the thirdparty (if we invoice a parent company,
 // invoice should be on parent company).
 // If linking an invoice to another thirdparty than the one the is invoiced and using the alternative contact to define the invoiced thirdparty
 // will lead to false accountancy and a lot of other troubles. So this option may be reserved to integrators only and not be suggested to end users.
@@ -293,7 +293,7 @@ if ($prefix && preg_match('/makesend'.$prefix.'sampleinvoice/i', $action, $reg))
 
 if ($prefix && preg_match('/delete'.$prefix.'TOKEN/i', $action, $reg)) {
 	// Delete token
-	$result = $provider->deleteAccessToken();
+	$result = $provider->deleteAccessToken(getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP"));
 
 	if ($result) {
 		setEventMessages("Token deleted successfully", null, 'mesgs');
@@ -457,7 +457,11 @@ if ($stringwarning) {
 }
 
 if (!empty($formSetup2->items)) {
-	print $pdpRenderFormSetup($formSetup2, $langs->transnoentitiesnoconv('EInvoicingConnectionSetup'));
+	if (getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP")) {
+		print $langs->trans("EInvoicingInfoManagedByMasterSetup", getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP"));
+	} else {
+		print $pdpRenderFormSetup($formSetup2, $langs->transnoentitiesnoconv('EInvoicingConnectionSetup'));
+	}
 	print '<br>';
 }
 

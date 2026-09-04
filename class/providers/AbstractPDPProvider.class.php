@@ -1,5 +1,6 @@
 <?php
 /* Copyright (C) 2025       Laurent Destailleur         <eldy@users.sourceforge.net>
+ * Copyright (C) 2026		Jose Martinez				<jose.martinez@pichinov.com>
  * Copyright (C) 2025       Mohamed DAOUD               <mdaoud@dolicloud.com>
  * Copyright (C) 2026		MDW							<mdeweerd@users.noreply.github.com>
  *
@@ -215,17 +216,27 @@ abstract class AbstractPDPProvider
 	 * Providers that do not expose a directory lookup keep the default 'unsupported' status so
 	 * the feature degrades gracefully and never blocks them.
 	 *
-	 * @param 	string 	$idprof1 	Recipient professional id 1 (SIREN for France)
-	 * @return 	array{status:string,reachable:int,entries:int,active:int,unknown:int,identifier:string,linestatus:string,platform:string,effectivedate:int,message:string,httpcode:int}
-	 *								status: unsupported|error|absent|inactive|undetermined|routable ;
+	 * A SIREN can hold several reception addresses in the directory (the bare SIREN and one per
+	 * establishment SIRET), and only one of them is written into the invoice as BT-49. Answering on
+	 * whichever line the directory returns first would then report the reachability of an address the
+	 * invoice is not sent to: pass that BT-49 address as $addressingidentifier and the answer is about
+	 * it alone. An address that is not declared for that SIREN is reported as its own status, never
+	 * silently replaced by another line that happens to be open.
+	 *
+	 * @param 	string 	$idprof1 				Recipient professional id 1 (SIREN for France)
+	 * @param 	string 	$addressingidentifier 	Routing address the invoice is actually sent to (BT-49). Empty to answer on any line declared for the SIREN, which is what a caller with no invoice at hand wants.
+	 * @return 	array{status:string,reachable:int,entries:int,active:int,unknown:int,identifier:string,linestatus:string,platform:string,effectivedate:int,message:string,messageparam:string,httpcode:int}
+	 *								status: unsupported|error|absent|inactive|undetermined|routable|unknownaddress ;
 	 *								reachable: 1 routable, 0 not routable, -1 unknown ;
-	 *								identifier: first active electronic address found (if any) ;
+	 *								identifier: electronic address the answer is about ;
 	 *								linestatus/platform: directoryLineStatus and platformType of that address,
-	 *								reported to the user so a positive answer carries its provenance.
+	 *								reported to the user so a positive answer carries its provenance ;
+	 *								message: translation key naming where the answer comes from, with
+	 *								messageparam as its single parameter when the key takes one.
 	 */
-	public function checkRecipientDirectory($idprof1)
+	public function checkRecipientDirectory($idprof1, $addressingidentifier = '')
 	{
-		$result = array('status' => 'unsupported', 'reachable' => -1, 'entries' => 0, 'active' => 0, 'unknown' => 0, 'identifier' => '', 'linestatus' => '', 'platform' => '', 'effectivedate' => 0, 'message' => '', 'httpcode' => 0);
+		$result = array('status' => 'unsupported', 'reachable' => -1, 'entries' => 0, 'active' => 0, 'unknown' => 0, 'identifier' => '', 'linestatus' => '', 'platform' => '', 'effectivedate' => 0, 'message' => '', 'messageparam' => '', 'httpcode' => 0);
 
 		// The standardized route check uses the AFNOR Directory Service (XP Z12-013), so any conformant
 		// Approved Platform is supported. A provider that does not expose that base keeps the
@@ -261,6 +272,24 @@ abstract class AbstractPDPProvider
 			$lines = $response['response']['results'];
 		}
 		$result['entries'] = count($lines);
+
+		if ($result['entries'] > 0 && ($wanted = self::normalizeAddressingIdentifier($addressingidentifier)) !== '') {
+			// Keep only the line of the address this invoice is sent to. Whoever recorded a routing
+			// identifier for that third party (or forced one on the invoice) took responsibility for the
+			// address: reporting on a sibling line, open or not, would answer a question nobody asked.
+			$lines = array_values(array_filter($lines, function ($line) use ($wanted) {
+				return self::normalizeAddressingIdentifier(isset($line['addressingIdentifier']) ? $line['addressingIdentifier'] : '') === $wanted;
+			}));
+			if (empty($lines)) {
+				// The SIREN is in the directory, this address is not. Sending to an address the annuaire
+				// does not declare is rejected with a routing error (fr:213) whatever the other lines say,
+				// so this is a negative answer of its own, not an 'absent' recipient nor an 'inactive' one.
+				$result['status'] = 'unknownaddress';
+				$result['reachable'] = 0;
+				$result['identifier'] = $wanted;
+				return $result;
+			}
+		}
 
 		if ($result['entries'] > 0) {
 			// A directory line exists, but only an enabled one can actually receive: the annuaire also
@@ -344,6 +373,31 @@ abstract class AbstractPDPProvider
 	}
 
 	/**
+	 * Normalize an electronic address so two writings of the same one compare equal.
+	 *
+	 * The address recorded in Dolibarr and the one the directory returns are the same string in
+	 * principle, but they do not always come written the same way: a user typing a SIRET-suffixed
+	 * address adds spaces to read it, and a platform may qualify the address with the scheme it
+	 * belongs to ('0225:' for the French SIREN scheme, which the legacy SuperPDP endpoint does). The
+	 * scheme is not part of the address, and Dolibarr records the address without it, so neither
+	 * difference may turn a match into a mismatch and report a declared address as unknown.
+	 *
+	 * @param 	string 	$identifier 	Electronic address, as recorded or as returned by a platform
+	 * @return 	string 					Comparable form of that address, empty when there is none
+	 */
+	protected static function normalizeAddressingIdentifier($identifier)
+	{
+		$identifier = preg_replace('/\s+/', '', (string) $identifier);
+
+		$reg = array();
+		if (preg_match('/^[0-9]{4}:(.+)$/', $identifier, $reg)) {
+			$identifier = $reg[1];
+		}
+
+		return $identifier;
+	}
+
+	/**
 	 * Generate a UUID used to correlate logs between Dolibarr and PDP.
 	 *
 	 * This function creates a random UUID.
@@ -406,6 +460,84 @@ abstract class AbstractPDPProvider
 		);
 
 		return $flowResponse;
+	}
+
+	/**
+	 * Pick, among the documents the access point holds for a flow, the first one this module can read.
+	 *
+	 * A flow carries its invoice in several shapes: 'Converted' is the invoice rewritten into the
+	 * syntax configured on the access point account, 'Original' is what the issuer really sent, and
+	 * 'ReadableView' is the human readable copy - which, on an access point that builds it as a
+	 * Factur-X PDF, carries the same data again.
+	 *
+	 * 'Converted' comes first because it is the one that shields the import from an issuer emitting a
+	 * syntax this module does not read - UBL, in particular, belongs to the French socle but has no
+	 * implementation here. But it depends on a setting that lives on the access point account, outside
+	 * Dolibarr: left unset, the platform refuses to produce the document at all; set to a syntax this
+	 * module does not support, it produces one that cannot be imported. Neither case says anything
+	 * about the other documents of the same flow, so they are tried in turn rather than failing the
+	 * flow on the first miss.
+	 *
+	 * @param	string			$flowId				Identifier of the flow to read
+	 * @param	ProtocolManager	$protocolManager	Protocol factory used to recognize the documents
+	 * @return	array{file:?string,protocol:?AbstractProtocol,protocol_name:string,doc_type:string,fetched:int,attempts:string[],client_not_configured:bool}	The importable document, or a null protocol and the reason each shape was rejected
+	 */
+	protected function fetchImportableFlowDocument($flowId, $protocolManager)
+	{
+		$result = array(
+			'file' => null,
+			'protocol' => null,
+			'protocol_name' => '',
+			'doc_type' => '',
+			'fetched' => 0,				// nb of documents the access point did return, whatever their syntax
+			'attempts' => array(),
+			'client_not_configured' => false
+		);
+
+		// EINVOICING_PREFER_ORIGINAL: fetch the issuer's Original document (its Factur-X, which carries
+		// the human-readable PDF) before the Converted one, so the created supplier invoice keeps the PDF.
+		$docTypeOrder = getDolGlobalString('EINVOICING_PREFER_ORIGINAL')
+			? array('Original', 'Converted', 'ReadableView')
+			: array('Converted', 'Original', 'ReadableView');		// Default: First take the Converted (so always in same format defined in AP setup).
+		foreach ($docTypeOrder as $docType) {
+			$flowResponse = $this->fetchFlowData($flowId, $docType, 'get_flow_for_supplier_invoice');
+
+			if ($flowResponse['status_code'] != 200) {
+				if (isset($flowResponse['errorCode']) && $flowResponse['errorCode'] == 'CLIENT_NOT_CONFIGURED') {
+					// The access point has no conversion syntax configured for this client
+					$result['client_not_configured'] = true;
+				}
+				$result['attempts'][] = $docType . ": HTTP " . $flowResponse['status_code'] . (empty($flowResponse['errorMessage']) ? '' : ' - ' . $flowResponse['errorMessage']);
+				continue;
+			}
+
+			$result['fetched']++;
+
+			$content = (string) $flowResponse['response'];
+			$protocolName = $protocolManager->detectProtocolFromContent($content);
+			if (empty($protocolName)) {
+				$result['attempts'][] = $docType . ": unrecognized syntax";
+				continue;
+			}
+
+			$protocol = $protocolManager->getProtocol($protocolName);
+			if (empty($protocol)) {
+				$result['attempts'][] = $docType . ": " . $protocolName . " is not supported";
+				continue;
+			}
+
+			if ($docType != 'Converted') {
+				dol_syslog(__METHOD__ . " No usable 'Converted' document for flowId " . $flowId . " (" . implode(' | ', $result['attempts']) . "), reading the '" . $docType . "' one instead", LOG_WARNING, 0, "_einvoicing");
+			}
+
+			$result['file'] = $content;
+			$result['protocol'] = $protocol;
+			$result['protocol_name'] = $protocolName;
+			$result['doc_type'] = $docType;
+			break;
+		}
+
+		return $result;
 	}
 
 	/**
@@ -482,20 +614,31 @@ abstract class AbstractPDPProvider
 
 		// For backward compatibility with Dolibarr versions < 23.0.0
 		if (version_compare(DOL_VERSION, '23.0.0-alpha', '<')) {
-			dolibarr_set_const($db, $serviceName.'_TOKEN', $accessToken, 'chaine', 0, '', $conf->entity);
+			$forceentity = $conf->entity;
+			if (getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP")) {
+				$forceentity = getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP");
+			}
+
+			dolibarr_set_const($db, $serviceName.'_TOKEN', $accessToken, 'chaine', 0, '', $forceentity);
 
 			if ($refreshToken !== null) {
-				dolibarr_set_const($db, $serviceName.'_REFRESH', $refreshToken, 'chaine', 0, '', $conf->entity);
+				dolibarr_set_const($db, $serviceName.'_REFRESH', $refreshToken, 'chaine', 0, '', $forceentity);
 			}
 
 			if ($expire_at !== null) {
-				dolibarr_set_const($db, $serviceName.'_EXPIRE', $expire_at, 'chaine', 0, '', $conf->entity);
+				dolibarr_set_const($db, $serviceName.'_EXPIRE', $expire_at, 'chaine', 0, '', $forceentity);
 			}
 		} else {
 			// Check if a token already exists for this service
+
+			$forceentity = $conf->entity;
+			if (getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP")) {
+				$forceentity = getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP");
+			}
+
 			$sql_check = "SELECT rowid FROM ".MAIN_DB_PREFIX."oauth_token";
 			$sql_check .= " WHERE service = '".$db->escape($serviceName)."'";
-			$sql_check .= " AND entity = ".((int) $conf->entity);
+			$sql_check .= " AND entity = ".((int) $forceentity);
 
 			$resql = $db->query($sql_check);
 			if (!$resql) {
@@ -514,7 +657,7 @@ abstract class AbstractPDPProvider
 					$sql .= ", expire_at = '".$db->idate($expire_at, 'gmt')."'";
 				}
 				$sql .= " WHERE service = '".$db->escape($serviceName)."'";
-				$sql .= " AND entity = ".((int) $conf->entity);
+				$sql .= " AND entity = ".((int) $forceentity);
 			} else {
 				// --- Insert new token ---
 				$sql  = "INSERT INTO ".MAIN_DB_PREFIX."oauth_token (service, tokenstring";
@@ -527,7 +670,7 @@ abstract class AbstractPDPProvider
 				$sql .= $refreshToken !== null ? ", '".$db->escape($refreshToken)."'" : "";
 				$sql .= ", '".$db->idate($now)."'";
 				$sql .= $expire_at !== null ? ", '".$db->idate($expire_at, 'gmt')."'" : "";
-				$sql .= ", ".(int) $conf->entity.")";
+				$sql .= ", ".(int) $forceentity.")";
 			}
 
 			// Execute SQL
@@ -550,9 +693,10 @@ abstract class AbstractPDPProvider
 	/**
 	 * Retrieve OAuth token for the given PDP service.
 	 *
-	 * @return array{token:string,refresh_token:string,token_expires_at:string}|false   Array with keys 'access_token', 'refresh_token', 'expire_at', or false if not found
+	 * @param	int		$forceentity		0=Use current entity, >0=Use specific entity
+	 * @return 	array{token:string,refresh_token:string,token_expires_at:string}|false   Array with keys 'access_token', 'refresh_token', 'expire_at', or false if not found
 	 */
-	public function fetchOAuthTokenDB()
+	public function fetchOAuthTokenDB($forceentity = 0)
 	{
 		global $conf, $db;
 
@@ -564,6 +708,14 @@ abstract class AbstractPDPProvider
 			$token = getDolGlobalString($serviceName.'_TOKEN');
 			$refresh = getDolGlobalString($serviceName.'_REFRESH');
 			$expire = getDolGlobalString($serviceName.'_EXPIRE');
+
+			if ($forceentity) {
+				require_once DOL_DOCUMENT_ROOT."/core/lib/admin.lib.php";
+
+				$token = dolibarr_get_const($this->db, $serviceName.'_TOKEN', (int) $forceentity);
+				$refresh = dolibarr_get_const($this->db, $serviceName.'_REFRESH', (int) $forceentity);
+				$expire = dolibarr_get_const($this->db, $serviceName.'_EXPIRE', (int) $forceentity);
+			}
 
 			if (empty($token)) {
 				return false;
@@ -580,7 +732,7 @@ abstract class AbstractPDPProvider
 		$sql = "SELECT tokenstring, tokenstring_refresh, expire_at
 				FROM ".MAIN_DB_PREFIX."oauth_token
 				WHERE service = '".$db->escape($serviceName)."'
-				AND entity = ".((int) $conf->entity)." LIMIT 1";
+				AND entity = ".((int) ($forceentity ? $forceentity : $conf->entity))." LIMIT 1";
 
 		$resql = $db->query($sql);
 		if (!$resql) {
@@ -604,10 +756,12 @@ abstract class AbstractPDPProvider
 
 	/**
 	 * Insert or update OAuth token for the given PDP.
+	 * Called by the deleteAccessToken() only, itself called by the setup page only.
 	 *
+	 * @param	int		$forceentity		0=Use current entity, >0=Use specific entity
 	 * @return bool                        True if success, false otherwise
 	 */
-	public function deleteOAuthTokenDB()
+	public function deleteOAuthTokenDB($forceentity = 0)
 	{
 		global $conf, $db;
 
@@ -617,16 +771,17 @@ abstract class AbstractPDPProvider
 
 		if (version_compare(DOL_VERSION, '23.0.0', '<')) {
 			require_once DOL_DOCUMENT_ROOT."/core/lib/admin.lib.php";
-			dolibarr_del_const($this->db, $serviceName.'_TOKEN', $conf->entity);
-			dolibarr_del_const($this->db, $serviceName.'_REFRESH', $conf->entity);
-			dolibarr_del_const($this->db, $serviceName.'_EXPIRE', $conf->entity);
+
+			dolibarr_del_const($this->db, $serviceName.'_TOKEN', (int) ($forceentity ? $forceentity : $conf->entity));
+			dolibarr_del_const($this->db, $serviceName.'_REFRESH', (int) ($forceentity ? $forceentity : $conf->entity));
+			dolibarr_del_const($this->db, $serviceName.'_EXPIRE', (int) ($forceentity ? $forceentity : $conf->entity));
 			return true;
 		}
 
 		// Check if a token already exists for this service
 		$sql_check = "DELETE FROM ".MAIN_DB_PREFIX."oauth_token
 						WHERE service = '".$db->escape($serviceName)."'
-						AND entity = ".((int) $conf->entity);
+						AND entity = ".((int) ($forceentity ? $forceentity : $conf->entity));
 
 		$resql = $db->query($sql_check);
 		if (!$resql) {
@@ -700,7 +855,7 @@ abstract class AbstractPDPProvider
 	 *
 	 * @var array<int,string>
 	 */
-	private const LOGCALL_SENSITIVE_KEYS = array('client_secret', 'access_token', 'refresh_token', 'id_token', 'password');
+	const LOGCALL_SENSITIVE_KEYS = array('client_secret', 'access_token', 'refresh_token', 'id_token', 'password');
 
 	/**
 	 * Redact known sensitive fields (@see LOGCALL_SENSITIVE_KEYS) from a value before it is
@@ -756,6 +911,29 @@ abstract class AbstractPDPProvider
 	}
 
 	/**
+	 * Make an API payload safe to store in the utf8mb4 TEXT debug columns
+	 * (llx_einvoicing_call.response, llx_einvoicing_document.response_for_debug).
+	 *
+	 * Some PDP responses carry non-UTF-8 bytes (signed or compressed payloads): stored as-is
+	 * they raise a SQL error 1366 (Incorrect string value) and abort the flow. Valid UTF-8 is
+	 * kept unchanged; anything else is base64-encoded behind a marker so the trace stays both
+	 * storable and recoverable.
+	 *
+	 * @param   string|null $payload    Raw payload, possibly binary
+	 * @return  string                  UTF-8-safe representation
+	 */
+	protected function makeStorableDebugPayload($payload)
+	{
+		if (!is_string($payload) || $payload === '') {
+			return (string) $payload;
+		}
+		if (preg_match('//u', $payload)) {	// already valid UTF-8
+			return $payload;
+		}
+		return '[base64] ' . base64_encode($payload);
+	}
+
+	/**
 	 * Log an API call into llx_einvoicing_call using a SEPARATE database connection.
 	 *
 	 * The call trace must survive even when the caller's main transaction is rolled
@@ -778,7 +956,7 @@ abstract class AbstractPDPProvider
 	 * @param   string                      $requestId  Request-Id header sent with the call, kept to correlate our log with the one of the Access Point
 	 * @return  ?array{id:int,call_id:?string}           Created log identifiers, or null if not logged
 	 */
-	protected function logCall(?string $callType, $resource, $method, $params, $response, $statusCode, string $requestId = '')
+	protected function logCall($callType, $resource, $method, $params, $response, $statusCode, string $requestId = '')
 	{
 		global $conf, $user, $dolibarr_main_db_pass, $dbhistory;
 
@@ -806,8 +984,8 @@ abstract class AbstractPDPProvider
 		$call->method = ($method == 'POSTALREADYFORMATED' ? 'POST' : $method);
 		$call->endpoint = '/' . $resource;
 		$call->request_id = $requestId;
-		$call->request_body = is_array($params) ? json_encode($params) : $params;
-		$call->response = is_array($response) ? json_encode($response) : $response;
+		$call->request_body = $this->makeStorableDebugPayload(is_array($params) ? json_encode($params) : $params);
+		$call->response = $this->makeStorableDebugPayload(is_array($response) ? json_encode($response) : $response);
 		$call->provider = $this->name;
 		$call->entity = $conf->entity;
 		$call->status = ($statusCode == 200 || $statusCode == 202) ? 1 : 0;
@@ -964,7 +1142,7 @@ abstract class AbstractPDPProvider
 	 *
 	 * @var array<string,string>
 	 */
-	protected const FLOW_PROFILE_BY_GUIDELINE = array(
+	const FLOW_PROFILE_BY_GUIDELINE = array(
 		'urn:factur-x.eu:1p0:basic' => 'Basic',
 		'urn:cen.eu:en16931:2017' => 'CIUS',
 		'urn:cen.eu:en16931:2017#conformant#urn.cpro.gouv.fr:1p0:extended-ctc-fr' => 'Extended-CTC-FR',

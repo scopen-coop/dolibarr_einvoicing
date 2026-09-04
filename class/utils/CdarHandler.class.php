@@ -137,6 +137,18 @@ class CdarHandler
 	}
 
 	/**
+	 * @var string	Electronic address (MDT-73) the last CDAR was addressed to
+	 */
+	public $recipientURIID = '';
+
+	/**
+	 * @var string	Where that address came from: 'routing' (recorded in Dolibarr), 'einvoice' (BT-34 of
+	 *				the document received), 'directory' (access point directory), 'thirdpartyid' or
+	 *				'issuerid' (fallen back on an identifier of the vendor)
+	 */
+	public $recipientURIIDOrigin = '';
+
+	/**
 	 * readFromString
 	 *
 	 * @param  string $xmlString xml string
@@ -166,6 +178,11 @@ class CdarHandler
 
 	/**
 	 * generate
+	 *
+	 * Values coming from the data are escaped with htmlspecialchars() before they reach
+	 * DOMDocument::createElement(), which parses its second argument: an ampersand in a free text
+	 * (a rejection reason, a party name) would otherwise produce an empty element and lose the
+	 * information - same defect as issue #695 on the invoice side.
 	 *
 	 * @param  array $data array of data
 	 *
@@ -298,7 +315,7 @@ class CdarHandler
 		dol_include_once('/einvoicing/class/providers/PDPProviderManager.class.php');
 		$einvoicing = new EInvoicing($this->db);
 		$ProcessCondition = $einvoicing->getStatusLabel($statusCode);
-		$ProcessCondition = str_replace(' ', '_', $ProcessCondition);
+		$ProcessCondition = str_replace(' ', '_', dol_string_unaccent($ProcessCondition));
 		$ProcessCondition = preg_replace('/[^A-Za-z0-9_]/', '', $ProcessCondition); // Clean special chars
 
 		// Electronic address (MDT-73) of the CDAR recipient. Every status but the cash-in (212) is sent on a
@@ -315,13 +332,19 @@ class CdarHandler
 		//      alone: the invoice-level routing override it also knows about is looked up among the customer
 		//      invoices (element_type = 'facture'), which a supplier invoice must not read.
 		$RecipientURIID = $InvoiceIssuerGlobalID;
+		$this->recipientURIIDOrigin = 'issuerid';
 		if ($statusCode != 212 && $object->thirdparty instanceof Societe) {
 			$vendorRouting = $einvoicing->fetchDefaultRouting($object->thirdparty->id);
 			$vendorURIID = ($vendorRouting > 0) ? $einvoicing->removeSpaces((string) $vendorRouting) : '';	// 0 when none is recorded, -1 on error
 
+			if ($vendorURIID !== '') {
+				$this->recipientURIIDOrigin = 'routing';
+			}
+
 			if ($vendorURIID === '') {
 				$vendorURIID = $einvoicing->removeSpaces($vendorIdentity['uriid']);
 				if ($vendorURIID !== '') {
+					$this->recipientURIIDOrigin = 'einvoice';
 					dol_syslog(__METHOD__ . ' no routing ID recorded for vendor SIREN ' . $InvoiceIssuerGlobalID . ', replying to the electronic address of the invoice it sent us: ' . $vendorURIID, LOG_NOTICE);
 				}
 			}
@@ -335,6 +358,7 @@ class CdarHandler
 					$directory = $provider->checkRecipientDirectory($InvoiceIssuerGlobalID);
 					if (!empty($directory['identifier'])) {
 						$vendorURIID = $einvoicing->removeSpaces($directory['identifier']);
+						$this->recipientURIIDOrigin = 'directory';
 						dol_syslog(__METHOD__ . ' nothing known about how to reach vendor SIREN ' . $InvoiceIssuerGlobalID . ', using the address the directory declares for it: ' . $vendorURIID, LOG_NOTICE);
 					} else {
 						dol_syslog(__METHOD__ . ' nothing known about how to reach vendor SIREN ' . $InvoiceIssuerGlobalID . ' and the directory returned none (' . $directory['status'] . '), falling back on the SIREN as electronic address: the platform will refuse the status if it does not know the vendor under that address', LOG_WARNING);
@@ -344,12 +368,23 @@ class CdarHandler
 
 			if ($vendorURIID === '') {
 				$vendorURIID = $einvoicing->getBuyerCommunicationURI($object->thirdparty);
+				if ($vendorURIID !== '') {
+					$this->recipientURIIDOrigin = 'thirdpartyid';
+				}
 			}
 
 			if ($vendorURIID !== '') {	// Empty with EINVOICING_BLOCK_INVOICE_NO_ROUTING_ID and no routing: keep the SIREN, an empty MDT-73 is worse
 				$RecipientURIID = $vendorURIID;
+			} else {
+				$this->recipientURIIDOrigin = 'issuerid';
 			}
 		}
+		// The platform answers "Electronic address (MDT-73) is invalid" when it does not know the vendor
+		// under the address chosen above, and its message names neither the vendor nor the address. Keep
+		// both so the caller can say which one was tried and where it came from: without that, a received
+		// invoice that can be neither approved nor refused - and therefore not deleted - leaves the user
+		// with nothing to act on.
+		$this->recipientURIID = $RecipientURIID;
 
 		// MDG-43 blocks. Rule BR-FR-CDV-14: a "Encaissee" status (212) must carry at least one block with
 		// MDT-207 = MEN, and every MEN block must hold both an amount (MDT-215) and a VAT rate (MDT-224).
@@ -462,6 +497,7 @@ class CdarHandler
 
 		// Unique per-call name so two concurrent status sends of the same condition cannot collide (#226).
 		$filename = $tempDir . '/cdar_' . $ProcessCondition . '_' . bin2hex(random_bytes(8)) . '.xml';
+		$filename = strtolower(dol_sanitizePathName(dol_string_unaccent($filename)));
 
 		$result = $this->saveToFile($data, $filename);
 		if ($result === false) {
@@ -814,7 +850,7 @@ class CdarHandler
 		$context->appendChild($process);
 
 		$guideline = $dom->createElement('ram:GuidelineSpecifiedDocumentContextParameter');
-		$guideline->appendChild($dom->createElement('ram:ID', $guidelineID));
+		$guideline->appendChild($dom->createElement('ram:ID', htmlspecialchars((string) $guidelineID)));
 		$context->appendChild($guideline);
 		$root->appendChild($context);
 	}
@@ -832,7 +868,7 @@ class CdarHandler
 	private function addDateTimeElement($dom, $parent, $elementName, $value, $format)
 	{
 		$element = $dom->createElement($elementName);
-		$dateTimeStr = $dom->createElement('udt:DateTimeString', $value);
+		$dateTimeStr = $dom->createElement('udt:DateTimeString', htmlspecialchars((string) $value));
 		$dateTimeStr->setAttribute('format', $format);
 		$element->appendChild($dateTimeStr);
 		$parent->appendChild($element);
@@ -852,18 +888,18 @@ class CdarHandler
 		$party = $dom->createElement($elementName);
 
 		if (isset($data['GlobalID'])) {
-			$globalID = $dom->createElement('ram:GlobalID', $data['GlobalID']);
+			$globalID = $dom->createElement('ram:GlobalID', htmlspecialchars((string) $data['GlobalID']));
 			if (!empty($data['SchemeID'])) {
 				$globalID->setAttribute('schemeID', $data['SchemeID']);
 			}
 			$party->appendChild($globalID);
 		}
 
-		$party->appendChild($dom->createElement('ram:RoleCode', $data['RoleCode']));
+		$party->appendChild($dom->createElement('ram:RoleCode', htmlspecialchars((string) $data['RoleCode'])));
 
 		if (isset($data['URIID'])) {
 			$uriComm = $dom->createElement('ram:URIUniversalCommunication');
-			$uriID = $dom->createElement('ram:URIID', $data['URIID']);
+			$uriID = $dom->createElement('ram:URIID', htmlspecialchars((string) $data['URIID']));
 			$uriID->setAttribute('schemeID', $data['URISchemeID']);
 			$uriComm->appendChild($uriID);
 			$party->appendChild($uriComm);
@@ -994,8 +1030,8 @@ class CdarHandler
 	private function addExchangedDocument($dom, $root, $doc)
 	{
 		$exchanged = $dom->createElement('rsm:ExchangedDocument');
-		$exchanged->appendChild($dom->createElement('ram:ID', $doc['ID']));
-		$exchanged->appendChild($dom->createElement('ram:Name', $doc['Name']));
+		$exchanged->appendChild($dom->createElement('ram:ID', htmlspecialchars((string) $doc['ID'])));
+		$exchanged->appendChild($dom->createElement('ram:Name', htmlspecialchars((string) $doc['Name'])));
 
 		$this->addDateTimeElement($dom, $exchanged, 'ram:IssueDateTime', $doc['IssueDateTime'], self::FORMAT_DATETIME);
 
@@ -1023,7 +1059,7 @@ class CdarHandler
 		$multipleRef->appendChild($indicator);
 		$ack->appendChild($multipleRef);
 
-		$ack->appendChild($dom->createElement('ram:TypeCode', $doc['TypeCode']));
+		$ack->appendChild($dom->createElement('ram:TypeCode', htmlspecialchars((string) $doc['TypeCode'])));
 		$this->addDateTimeElement($dom, $ack, 'ram:IssueDateTime', $doc['IssueDateTime'], self::FORMAT_DATETIME);
 		$this->addReferencedDocument($dom, $ack, $doc['ReferenceReferencedDocument']);
 
@@ -1041,18 +1077,18 @@ class CdarHandler
 	private function addReferencedDocument($dom, $parent, $doc)
 	{
 		$ref = $dom->createElement('ram:ReferenceReferencedDocument');
-		$ref->appendChild($dom->createElement('ram:IssuerAssignedID', $doc['IssuerAssignedID']));
-		$ref->appendChild($dom->createElement('ram:StatusCode', $doc['StatusCode']));
-		$ref->appendChild($dom->createElement('ram:TypeCode', $doc['TypeCode']));
+		$ref->appendChild($dom->createElement('ram:IssuerAssignedID', htmlspecialchars((string) $doc['IssuerAssignedID'])));
+		$ref->appendChild($dom->createElement('ram:StatusCode', htmlspecialchars((string) $doc['StatusCode'])));
+		$ref->appendChild($dom->createElement('ram:TypeCode', htmlspecialchars((string) $doc['TypeCode'])));
 
 		$formattedDateTime = $dom->createElement('ram:FormattedIssueDateTime');
-		$dateTimeStr = $dom->createElement('qdt:DateTimeString', $doc['FormattedIssueDateTime']);
+		$dateTimeStr = $dom->createElement('qdt:DateTimeString', htmlspecialchars((string) $doc['FormattedIssueDateTime']));
 		$dateTimeStr->setAttribute('format', self::FORMAT_DATE);
 		$formattedDateTime->appendChild($dateTimeStr);
 		$ref->appendChild($formattedDateTime);
 
-		$ref->appendChild($dom->createElement('ram:ProcessConditionCode', $doc['ProcessConditionCode']));
-		$ref->appendChild($dom->createElement('ram:ProcessCondition', $doc['ProcessCondition']));
+		$ref->appendChild($dom->createElement('ram:ProcessConditionCode', htmlspecialchars((string) $doc['ProcessConditionCode'])));
+		$ref->appendChild($dom->createElement('ram:ProcessCondition', htmlspecialchars((string) $doc['ProcessCondition'])));
 
 		$this->addTradeParty($dom, $ref, 'ram:IssuerTradeParty', $doc['IssuerTradeParty']);
 		$parent->appendChild($ref);
@@ -1062,13 +1098,13 @@ class CdarHandler
 
 			if (!empty($doc['SpecifiedDocumentStatus']['ReasonCode'])) {
 				$status->appendChild(
-					$dom->createElement('ram:ReasonCode', $doc['SpecifiedDocumentStatus']['ReasonCode'])
+					$dom->createElement('ram:ReasonCode', htmlspecialchars((string) $doc['SpecifiedDocumentStatus']['ReasonCode']))
 				);
 			}
 
 			if (!empty($doc['SpecifiedDocumentStatus']['Reason'])) {
 				$status->appendChild(
-					$dom->createElement('ram:Reason', $doc['SpecifiedDocumentStatus']['Reason'])
+					$dom->createElement('ram:Reason', htmlspecialchars((string) $doc['SpecifiedDocumentStatus']['Reason']))
 				);
 			}
 
@@ -1086,10 +1122,10 @@ class CdarHandler
 			if (!empty($doc['SpecifiedDocumentStatus']['SpecifiedDocumentCharacteristic'])) {
 				foreach ($doc['SpecifiedDocumentStatus']['SpecifiedDocumentCharacteristic'] as $characteristic) {
 					$characteristicElement = $dom->createElement('ram:SpecifiedDocumentCharacteristic');
-					$characteristicElement->appendChild($dom->createElement('ram:TypeCode', $characteristic['TypeCode']));
+					$characteristicElement->appendChild($dom->createElement('ram:TypeCode', htmlspecialchars((string) $characteristic['TypeCode'])));
 
 					if (isset($characteristic['ValueAmount'])) {
-						$amountElement = $dom->createElement('ram:ValueAmount', (string) $characteristic['ValueAmount']);
+						$amountElement = $dom->createElement('ram:ValueAmount', htmlspecialchars((string) $characteristic['ValueAmount']));
 						if (!empty($characteristic['CurrencyID'])) {
 							$amountElement->setAttribute('currencyID', $characteristic['CurrencyID']);
 						}
@@ -1101,7 +1137,7 @@ class CdarHandler
 					}
 
 					if (isset($characteristic['ValuePercent'])) {
-						$characteristicElement->appendChild($dom->createElement('ram:ValuePercent', (string) $characteristic['ValuePercent']));
+						$characteristicElement->appendChild($dom->createElement('ram:ValuePercent', htmlspecialchars((string) $characteristic['ValuePercent'])));
 					}
 
 					$status->appendChild($characteristicElement);
