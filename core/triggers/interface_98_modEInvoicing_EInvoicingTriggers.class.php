@@ -279,6 +279,22 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 		if ($action == 'BILL_SUPPLIER_VALIDATE') {
 			/** @var FactureFournisseur $object */
 			'@phan-var-force FactureFournisseur $object';
+			$duplicateTotals = false;
+			if (getDolGlobalInt('EINVOICING_IMPORT_SUPPLIER_ORDER_LINES') && SupplierInvoiceHelper::isEInvoice($object->id, false, $duplicateTotals)) {
+				if ($duplicateTotals) {
+					$this->errors[] = $langs->trans('EinvoicingDuplicateDocumentForSupplierInvoice', $object->id);
+					return -1;
+				}
+				$resTotals = SupplierInvoiceHelper::checkPaHeaderTotals($object, true);
+				if (empty($resTotals['unavailable']) && empty($resTotals['identical'])) {
+					$this->errors[] = $langs->trans('EInvoiceAndDolInvoiceComparisonFailed');
+					foreach ($resTotals['errors'] as $errorMsg) {
+						$this->errors[] = '- ' . $errorMsg;
+					}
+					return -1;
+				}
+			}
+
 			$duplicate = false;
 			if (getDolGlobalInt('EINVOICING_SUPPLIER_INVOICE_CHECK_CONSISTENCY_ON_VALIDATION') && SupplierInvoiceHelper::isEInvoice($object->id, false, $duplicate)) {
 				if ($duplicate) {

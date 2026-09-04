@@ -58,6 +58,11 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 	public $warnings = array();
 
 	/**
+	 * @var array<int,mixed> Array the completeTabsHead hook fills so the core can merge extra tabs
+	 */
+	public $resArray = array();
+
+	/**
 	 * systemMessage
 	 *
 	 * @param array<string,mixed> 	$parameters		Array of parameters
@@ -505,6 +510,19 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 					} else {
 						print dolGetButtonAction('', $langs->trans('einvoice'), 'default', $url_button, '', true);
 					}
+				}
+			}
+
+			dol_include_once('einvoicing/class/utils/SupplierOrderLineImporter.class.php');
+			if (SupplierOrderLineImporter::isEligibleInvoice($object) && $user->hasRight('fournisseur', 'facture', 'creer')) {
+				print '<a class="butAction" href="'.dol_buildpath('/einvoicing/supplierinvoice_importorderlines.php', 1).'?id='.((int) $object->id).'">'.$langs->trans('ImportSupplierOrderLines').'</a>';
+			}
+			if (SupplierOrderLineImporter::isEligibleInvoice($object)) {
+				$comparison = SupplierInvoiceHelper::checkPaHeaderTotals($object, false);
+				if (empty($comparison['unavailable']) && empty($comparison['identical'])) {
+					$jsmsg = json_encode($langs->trans('PaTotalsMismatchCannotValidate'));
+					print "\n<!-- einvoicing: refuse validation when PA totals do not match -->\n";
+					print '<script>jQuery(function($){var t='.$jsmsg.';$("div.tabsAction a[href*=\'action=valid\']").each(function(){$(this).removeClass("butAction").addClass("butActionRefused").removeAttr("href").css("cursor","not-allowed").attr("title",t).on("click",function(e){e.preventDefault();e.stopImmediatePropagation();return false;});});});</script>';
 				}
 			}
 		}
@@ -1831,6 +1849,44 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 			$this->errors[] = $this->error;
 			return -1;
 		}
+
+		return 0;
+	}
+
+	/**
+	 * Add a tab on a draft received supplier e-invoice to import supplier-order lines.
+	 *
+	 * @param	array<string,mixed>	$parameters		Hook metadata
+	 * @param	CommonObject		$object			Current object
+	 * @param	?string				$action			Current action
+	 * @param	HookManager			$hookmanager	Hook manager
+	 * @return	int
+	 */
+	public function completeTabsHead($parameters, $object, &$action, $hookmanager)
+	{
+		global $langs, $user;
+
+		if (empty($object) || empty($object->element) || $object->element != 'invoice_supplier') {
+			return 0;
+		}
+
+		dol_include_once('einvoicing/class/utils/SupplierOrderLineImporter.class.php');
+		if (!SupplierOrderLineImporter::isEligibleInvoice($object)) {
+			return 0;
+		}
+		if (!$user->hasRight('fournisseur', 'facture', 'lire')) {
+			return 0;
+		}
+
+		$langs->load('einvoicing@einvoicing');
+		if (empty($this->resArray) || !is_array($this->resArray)) {
+			$this->resArray = array();
+		}
+		$this->resArray[] = array(
+			dol_buildpath('/einvoicing/supplierinvoice_importorderlines.php', 1).'?id='.((int) $object->id),
+			$langs->trans('ImportSupplierOrderLines'),
+			'importorderlines'
+		);
 
 		return 0;
 	}

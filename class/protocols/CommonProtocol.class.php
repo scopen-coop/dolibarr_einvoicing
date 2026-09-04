@@ -1060,6 +1060,22 @@ trait CommonProtocol
 	}
 
 	/**
+	 * Whether a supplier-invoice line received from the Access Point must be stored as a free
+	 * description line, skipping product matching (and product auto-creation) even when a
+	 * product would match.
+	 *
+	 * Two options lead here: import every line as a free line, or import as free lines so they
+	 * can later be replaced by supplier-order lines.
+	 *
+	 * @return bool
+	 */
+	public function shouldForceFreeDescriptionLine()
+	{
+		return (bool) getDolGlobalInt('EINVOICING_IMPORT_ALL_AS_FREE_LINES')
+			|| (bool) getDolGlobalInt('EINVOICING_IMPORT_SUPPLIER_ORDER_LINES');
+	}
+
+	/**
 	 * Find or create a Dolibarr product based on Einvoice line data
 	 *
 	 * @param array $lineData Array containing invoice line data extracted from XML
@@ -1074,6 +1090,9 @@ trait CommonProtocol
 		 * This matching strategy attempts to find or create a product based on
 		 * XML invoice line data, following a priority-based approach.
 		 *
+		 * 0. If EINVOICING_IMPORT_ALL_AS_FREE_LINES or EINVOICING_IMPORT_SUPPLIER_ORDER_LINES
+		 *    is on, skip matching and return res=0 so the protocol stores a free description line.
+		 *
 		 * 1 to 4. Search of an existing product, see findProductFromEinvoiceLine()
 		 *
 		 * 5. If no match found after all steps:
@@ -1084,6 +1103,11 @@ trait CommonProtocol
 		 *      to an existing one with einvoicing/product_mapping.php)
 		 */
 		global $db, $user, $langs;
+
+		if ($this->shouldForceFreeDescriptionLine()) {
+			dol_syslog(get_class($this) . '::_findOrCreateProductFromEinvoiceLine forcing free description line (skip product matching)', LOG_DEBUG);
+			return array('res' => 0, 'message' => 'Line imported as free description line', 'matchtype' => 'forcedfreeline');
+		}
 
 		$einvoicing = new EInvoicing($db);
 

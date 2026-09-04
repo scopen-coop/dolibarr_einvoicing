@@ -2,6 +2,20 @@
 
 ## 1.1.0
 
+NEW: A module option imports every supplier-invoice line received from the Access Point as a free
+description line, whether or not a product matches in the database. Product matching and automatic
+product creation are skipped. The existing option still imports as a free line only when no product
+is found.
+
+NEW: A draft supplier invoice received from the Access Point can have its free lines replaced by
+lines taken from supplier orders of the same vendor. The option EINVOICING_IMPORT_SUPPLIER_ORDER_LINES
+imports the e-invoice lines as free description lines, then offers a button and a tab listing the
+order lines (filterable and sortable: order ref, product, quantity, project, unit price, total excl.
+VAT, plus extrafields such as a Wrike project or an analytical code when they exist). Importing the
+selected lines deletes the free lines and copies the order lines the same way as when a supplier
+invoice is created from a supplier order. Validation of that draft is refused until the invoice
+totals (excl. VAT, VAT, incl. VAT) match the amounts transmitted by the Access Point.
+
 FIX: The remote information of the SuperPDP setup page now describes the e-invoice address the module
 really sends with. A company can hold several entries in the French directory at once - one per
 document family, '<siren>_Invoice' or '<siren>_Status', beside the bare identifier - and the screen

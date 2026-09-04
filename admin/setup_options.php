@@ -365,12 +365,24 @@ if (!getDolGlobalString('EINVOICING_DISABLE_SYNC_AP_TO_DOLI')) {
 
 	// Setup conf to import lines as free description lines when no product is found and no default product exist on supplier
 	// TODO This option is exclusive with EINVOICING_PRODUCTS_AUTO_GENERATION so should be disabled if EINVOICING_PRODUCTS_AUTO_GENERATION is on
-	if (!getDolGlobalString("EINVOICING_PRODUCTS_AUTO_GENERATION")) {
+	if (!getDolGlobalString("EINVOICING_PRODUCTS_AUTO_GENERATION") && !getDolGlobalString("EINVOICING_IMPORT_ALL_AS_FREE_LINES")) {
 		$item = $formSetup->newItem('EINVOICING_IMPORT_AS_FREE_LINES')->setAsYesNo();
 		$item->helpText = $langs->transnoentities('EINVOICING_IMPORT_AS_FREE_LINES_HELP');
 		$item->defaultFieldValue = '0';
 		$item->cssClass = 'minwidth500';
 	}
+
+	// Import every PA supplier-invoice line as a free description line, even when a product matches
+	$item = $formSetup->newItem('EINVOICING_IMPORT_ALL_AS_FREE_LINES')->setAsYesNo();
+	$item->helpText = $langs->transnoentities('EINVOICING_IMPORT_ALL_AS_FREE_LINES_HELP');
+	$item->defaultFieldValue = '0';
+	$item->cssClass = 'minwidth500';
+	$item->fieldParams['forcereload'] = 1;
+
+	$item = $formSetup->newItem('EINVOICING_IMPORT_SUPPLIER_ORDER_LINES')->setAsYesNo();
+	$item->helpText = $langs->transnoentities('EINVOICING_IMPORT_SUPPLIER_ORDER_LINES_HELP');
+	$item->defaultFieldValue = '0';
+	$item->cssClass = 'minwidth500';
 
 	// Setup conf to choose use of auto generation or not of third parties
 	$item = $formSetup->newItem('EINVOICING_THIRDPARTIES_AUTO_GENERATION')->setAsYesNo();
