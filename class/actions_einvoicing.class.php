@@ -546,6 +546,24 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 			}
 		}
 
+		// Import supplier-order lines onto a received draft e-invoice. Independent of the
+		// multi-company "change entity" button: that option is off on most instances.
+		if (in_array($object->element, ['invoice_supplier']) && !empty($object->id)
+			&& preg_match('/invoicesuppliercard|main/', $parameters['currentcontext'] ?? '')) {
+			dol_include_once('einvoicing/class/utils/SupplierOrderLineImporter.class.php');
+			if (SupplierOrderLineImporter::isEligibleInvoice($object)) {
+				if ($user->hasRight('fournisseur', 'facture', 'creer')) {
+					print '<a class="butAction" href="'.dol_buildpath('/einvoicing/supplierinvoice_importorderlines.php', 1).'?id='.((int) $object->id).'">'.$langs->trans('ImportSupplierOrderLines').'</a>';
+				}
+				$comparison = SupplierInvoiceHelper::checkPaHeaderTotals($object, false);
+				if (empty($comparison['unavailable']) && empty($comparison['identical'])) {
+					$jsmsg = json_encode($langs->trans('PaTotalsMismatchCannotValidate'));
+					print "\n<!-- einvoicing: refuse validation when PA totals do not match -->\n";
+					print '<script>jQuery(function($){var t='.$jsmsg.';$("div.tabsAction a[href*=\'action=valid\']").each(function(){$(this).removeClass("butAction").addClass("butActionRefused").removeAttr("href").css("cursor","not-allowed").attr("title",t).on("click",function(e){e.preventDefault();e.stopImmediatePropagation();return false;});});});</script>';
+				}
+			}
+		}
+
 		// Add button to change the entity (multi-company) of a supplier invoice (we test context invoicesuppliercard but also main for old versions of module)
 		if (getDolGlobalString('EINVOICING_ALLOW_MULTICOMPANY_INVOICE_MOVE') && isModEnabled('multicompany') && in_array($object->element, ['invoice_supplier'])
 			&& !empty($object->id) && $user->hasRight('fournisseur', 'facture', 'creer') && preg_match('/invoicesuppliercard|main/', $parameters['currentcontext'] ?? '')) {
@@ -555,19 +573,6 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 			} else {
 				print '<span class="butActionRefused classfortooltip" title="' . dol_escape_htmltag($langs->trans('DisabledBecauseNotEditable')) . '">'
 					. $langs->trans('ChangeEntity') . '</span>';
-			}
-
-			dol_include_once('einvoicing/class/utils/SupplierOrderLineImporter.class.php');
-			if (SupplierOrderLineImporter::isEligibleInvoice($object) && $user->hasRight('fournisseur', 'facture', 'creer')) {
-				print '<a class="butAction" href="'.dol_buildpath('/einvoicing/supplierinvoice_importorderlines.php', 1).'?id='.((int) $object->id).'">'.$langs->trans('ImportSupplierOrderLines').'</a>';
-			}
-			if (SupplierOrderLineImporter::isEligibleInvoice($object)) {
-				$comparison = SupplierInvoiceHelper::checkPaHeaderTotals($object, false);
-				if (empty($comparison['unavailable']) && empty($comparison['identical'])) {
-					$jsmsg = json_encode($langs->trans('PaTotalsMismatchCannotValidate'));
-					print "\n<!-- einvoicing: refuse validation when PA totals do not match -->\n";
-					print '<script>jQuery(function($){var t='.$jsmsg.';$("div.tabsAction a[href*=\'action=valid\']").each(function(){$(this).removeClass("butAction").addClass("butActionRefused").removeAttr("href").css("cursor","not-allowed").attr("title",t).on("click",function(e){e.preventDefault();e.stopImmediatePropagation();return false;});});});</script>';
-				}
 			}
 		}
 
