@@ -95,18 +95,42 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 				}
 			}
 
-			// Default product for import
-			$routingProductId = GETPOST('routing_product_id', 'aZ09');
-			if ($routingProductId !== '' && $routingProductId !== '-1') {
-				$existing = $einvoicing->fetchDefaultRouting($socId, 'product');
-				if (empty($existing)) {
-					$result = $einvoicing->addRouting($socId, $routingProductId, '', 'product');
-				} else {
-					$result = $einvoicing->setDefaultRouting($socId, $routingProductId, '', '', '', 'product');
+			// Default product for import.
+			// The combo posts '-1' when the empty entry is picked, and '' when the ajax search input is
+			// cleared: both mean "no default product any more", so the routing has to be deleted. Two
+			// saves must leave the current value untouched: one that does not carry the field at all
+			// (thirdparty updated from the API, a mass action, an import...), and one whose field could
+			// not show the current value, which routing_product_id_shown tells apart.
+			if (GETPOSTISSET('routing_product_id')) {
+				$routingProductId = GETPOST('routing_product_id', 'aZ09');
+				if ($routingProductId === '-1' || $routingProductId === '0') {
+					$routingProductId = '';
 				}
-				if ($result < 0) {
-					$error++;
-					$this->errors[] = $langs->trans('FailedToSaveRoutingID').' '.$einvoicing->error;
+				$shownProductId = GETPOST('routing_product_id_shown', 'aZ09');
+				if ($shownProductId === '-1' || $shownProductId === '0') {
+					$shownProductId = '';
+				}
+				$existing = $einvoicing->fetchDefaultRouting($socId, 'product');
+				$result = 0;
+				if ($routingProductId === '') {
+					if ($shownProductId !== '' && !empty($existing)) {
+						// setDefaultRouting() with an empty value only deletes the existing routing
+						$result = $einvoicing->setDefaultRouting($socId, '', '', '', '', 'product');
+						if ($result < 0) {
+							$error++;
+							$this->errors[] = $langs->trans('FailedToDeleteRoutingID').' '.$einvoicing->error;
+						}
+					}
+				} else {
+					if (empty($existing)) {
+						$result = $einvoicing->addRouting($socId, $routingProductId, '', 'product');
+					} else {
+						$result = $einvoicing->setDefaultRouting($socId, $routingProductId, '', '', '', 'product');
+					}
+					if ($result < 0) {
+						$error++;
+						$this->errors[] = $langs->trans('FailedToSaveRoutingID').' '.$einvoicing->error;
+					}
 				}
 			}
 
@@ -381,19 +405,23 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 				// A draft is a local booking, not the electronic invoice: it holds no accounting entry and
 				// says nothing to the platform, so removing it repudiates nothing. It is also the only way
 				// out of an import that landed on the wrong third party, since the vendor of an existing
-				// supplier invoice cannot be changed. Read the status from the database: the object handed
-				// to a trigger is not always freshly fetched.
+				// supplier invoice cannot be changed. Re-read the invoice: the object handed to a trigger
+				// is not always freshly fetched. It is re-read through the core class rather than by a
+				// query of our own, so the fk_statut column name and its mapping stay the business of
+				// Dolibarr. The property to read is ->status: fetch() selects "fk_statut as status" and
+				// fills ->status on every supported version (18 to 24), while ->statut is only kept as a
+				// backward compatibility alias, marked @deprecated since 19.
+				// A supplier invoice that cannot be re-read leaves the status at its initial -1, which is
+				// no draft, so the deletion is refused - exactly what the query it replaces did when it
+				// returned no row.
 				// The incoming flow itself is kept, detached from the invoice that is about to disappear,
 				// so the document stays in the flow list and can be imported again.
 				$status = -1;
-				$sqlstatus = "SELECT fk_statut FROM ".MAIN_DB_PREFIX."facture_fourn WHERE rowid = ".((int) $object->id);
-				$resqlstatus = $this->db->query($sqlstatus);
-				if ($resqlstatus) {
-					$objstatus = $this->db->fetch_object($resqlstatus);
-					if ($objstatus) {
-						$status = (int) $objstatus->fk_statut;
-					}
-					$this->db->free($resqlstatus);
+				$invoicetodelete = new FactureFournisseur($this->db);
+				if ($invoicetodelete->fetch((int) $object->id) > 0) {
+					$status = (int) $invoicetodelete->status;
+				} else {
+					dol_syslog(__METHOD__ . ' Cannot re-read the supplier invoice id=' . ((int) $object->id) . ' being deleted: its deletion is refused', LOG_ERR);
 				}
 
 				if ($status !== FactureFournisseur::STATUS_DRAFT) {

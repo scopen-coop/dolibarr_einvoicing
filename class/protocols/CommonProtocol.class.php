@@ -24,6 +24,8 @@
  * \brief   Common methods for all AP protocols.
  */
 
+dol_include_once('einvoicing/lib/einvoicing.lib.php');	// removeAllSpaces(), used to clean the identifiers read from a received document
+
 /**
  * @mixin AbstractProtocol
  */
@@ -560,7 +562,7 @@ trait CommonProtocol
 		// Step 2: Try to find using VAT number if not found by global IDs
 		if ($thirdpartyId < 0) {
 			if (!empty($sellerInfo['sellerTaxRegistations']['VA'])) {
-				$sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "societe WHERE REPLACE(tva_intra, ' ', '') = '" . $db->escape($einvoicing->removeSpaces($sellerInfo['sellerTaxRegistations']['VA'])) . "' AND entity IN (". getEntity('societe').")";
+				$sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "societe WHERE REPLACE(tva_intra, ' ', '') = '" . $db->escape(removeAllSpaces($sellerInfo['sellerTaxRegistations']['VA'])) . "' AND entity IN (". getEntity('societe').")";
 				$resql = $db->query($sql);
 				if ($resql) {
 					if ($db->num_rows($resql) > 1) {
@@ -717,13 +719,13 @@ trait CommonProtocol
 							if (!empty($globalId)) {
 								$idprofField = $this->_mapGlobalIdSchemeToIdprof($idScheme, $sellerCountryCode);
 								if (!empty($idprofField)) {
-									$thirdparty->$idprofField = $einvoicing->removeSpaces($globalId);
+									$thirdparty->$idprofField = removeAllSpaces($globalId);
 								}
 							}
 						}
 					}
 					if (!empty($sellerInfo['sellerTaxRegistations']['VA'])) {
-						$thirdparty->tva_intra = $einvoicing->removeSpaces($sellerInfo['sellerTaxRegistations']['VA']);
+						$thirdparty->tva_intra = removeAllSpaces($sellerInfo['sellerTaxRegistations']['VA']);
 						$thirdparty->tva_assuj = 1;
 					}
 				} elseif ($priority === 'dolibarr') { // Fill only empty fields from pdp data
@@ -765,13 +767,13 @@ trait CommonProtocol
 							if (!empty($globalId)) {
 								$idprofField = $this->_mapGlobalIdSchemeToIdprof($idScheme, $sellerCountryCode);
 								if (!empty($idprofField) && empty($thirdparty->$idprofField)) {
-									$thirdparty->$idprofField = $einvoicing->removeSpaces($globalId);
+									$thirdparty->$idprofField = removeAllSpaces($globalId);
 								}
 							}
 						}
 					}
 					if (!empty($sellerInfo['sellerTaxRegistations']['VA']) && empty($thirdparty->tva_intra)) {
-						$thirdparty->tva_intra = $einvoicing->removeSpaces($sellerInfo['sellerTaxRegistations']['VA']);
+						$thirdparty->tva_intra = removeAllSpaces($sellerInfo['sellerTaxRegistations']['VA']);
 						$thirdparty->tva_assuj = 1;
 					}
 				}
@@ -855,14 +857,14 @@ trait CommonProtocol
 					if (!empty($globalId)) {
 						$idprofField = $this->_mapGlobalIdSchemeToIdprof($idScheme, $sellerCountryCode);
 						if (!empty($idprofField)) {
-							$thirdparty->$idprofField = $einvoicing->removeSpaces($globalId);
+							$thirdparty->$idprofField = removeAllSpaces($globalId);
 						}
 					}
 				}
 			}
 
 			if (!empty($sellerInfo['sellerTaxRegistations']['VA'])) {
-				$thirdparty->tva_intra = $einvoicing->removeSpaces($sellerInfo['sellerTaxRegistations']['VA']);
+				$thirdparty->tva_intra = removeAllSpaces($sellerInfo['sellerTaxRegistations']['VA']);
 				$thirdparty->tva_assuj = 1;
 			}
 
@@ -1842,6 +1844,7 @@ trait CommonProtocol
 						$sql .= " WHERE taux = ".((float) $vat_rate);
 						$sql .= " AND active = 1";
 						$sql .= " AND fk_pays = ".((int) $mysoc->country_id);
+						$sql .= $this->_getVatDictionaryEntityFilter();
 						$sql .= " AND (code = '".$db->escape($vat_src_code)."')";
 						$resql = $db->query($sql);
 						if ($resql) {
@@ -1884,6 +1887,7 @@ trait CommonProtocol
 						$sql .= " WHERE taux = ".((float) $vat_rate);
 						$sql .= " AND active = 1";
 						$sql .= " AND fk_pays = ".((int) $mysoc->country_id);
+						$sql .= $this->_getVatDictionaryEntityFilter();
 						$sql .= " AND (code = '".$db->escape($vat_src_code)."')";
 						$resql = $db->query($sql);
 						if ($resql) {
@@ -1954,6 +1958,29 @@ trait CommonProtocol
 	}
 
 	/**
+	 * Build the entity restriction of a read of the VAT dictionary table.
+	 *
+	 * The dictionary is per entity: a line of it belongs to the entity that declared it, and the core
+	 * reads it with "AND t.entity IN (".getEntity('c_tva').")" (see getTaxesFromId() in
+	 * htdocs/core/lib/functions.lib.php). Reading it without that clause answers a line another entity
+	 * declared, so the invoice carries an exemption reason (BT-121) that is not the seller's one.
+	 *
+	 * The column itself only exists from Dolibarr 19: it is added by the 18.0.0-19.0.0 migration, and
+	 * the core of 18 reads llx_c_tva with no entity clause at all. So on 18 there is nothing to restrict
+	 * and naming the column would only break the query.
+	 *
+	 * @return	string		SQL clause to append to the WHERE, '' on Dolibarr 18
+	 */
+	private function _getVatDictionaryEntityFilter()
+	{
+		if ((float) DOL_VERSION < 19.0) {
+			return '';
+		}
+
+		return " AND entity IN (".getEntity('c_tva').")";
+	}
+
+	/**
 	 * Read the VAT dictionary line a rate and a code point to.
 	 *
 	 * @param	float|string	$vat_rate		VAT rate of the invoice line
@@ -1974,6 +2001,7 @@ trait CommonProtocol
 		$sql .= " WHERE taux = ".((float) $vat_rate);
 		$sql .= " AND active = 1";
 		$sql .= " AND fk_pays = ".((int) $mysoc->country_id);
+		$sql .= $this->_getVatDictionaryEntityFilter();
 		$sql .= " AND code = '".$db->escape($vat_src_code)."'";
 		$sql .= " LIMIT 1";
 
@@ -2196,13 +2224,22 @@ trait CommonProtocol
 				$nbDays = (int) round(($dueDate - $invoiceDateTimestamp) / 86400);
 
 				if ($nbDays >= 0) {
+					// The dictionary is per entity (llx_c_payment_term.entity, unique key on entity+code), so the
+					// term must be looked for in the entities the current one may read, the way the core reads
+					// that same table (Form::load_cache_conditions_paiement(), CommonInvoice::calculate_date_lim_reglement()).
+					$entities = getEntity('c_payment_term'); // for the log line below only, see the WHERE clause
+
 					$sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "c_payment_term";
-					$sql .= " WHERE nbjour = " . ((int) $nbDays);
+					// getEntity() is called inline rather than through the variable above on purpose: the SQL
+					// plugin of phan rejects any variable interpolated into a query, however safe its origin
+					$sql .= " WHERE entity IN (" . getEntity('c_payment_term') . ")";
+					$sql .= " AND nbjour = " . ((int) $nbDays);
 					$sql .= " AND type_cdr = 0"; // fixed number of days only (no end of month)
 					$sql .= " AND active = 1";
 					$sql .= " ORDER BY rowid ASC"; // deterministic pick if duplicates
 					$sql .= " LIMIT 1";
 
+					dol_syslog(get_class($this) . '::_applyPaymentInfoToSupplierInvoice Looking for a payment term of ' . $nbDays . ' day(s) in entity ' . $entities, LOG_DEBUG);
 					$resql = $db->query($sql);
 					if ($resql && $db->num_rows($resql) == 1) {
 						$obj = $db->fetch_object($resql);
@@ -2226,17 +2263,21 @@ trait CommonProtocol
 			if (isset(self::$UNTDID4461_TO_DOLIBARR_PAIEMENT_CODE[$untdidCode])) {
 				$dolibarrPaymentCode = self::$UNTDID4461_TO_DOLIBARR_PAIEMENT_CODE[$untdidCode];
 
-				$sql = "SELECT id FROM " . MAIN_DB_PREFIX . "c_paiement";
-				$sql .= " WHERE code = '" . $db->escape($dolibarrPaymentCode) . "'";
-				$sql .= " AND active = 1";
-				$sql .= " LIMIT 1";
+				// Read the dictionary through the core helper instead of forging the query here: it
+				// applies the multicompany filter (entity IN (getEntity('c_paiement'))) and caches the
+				// lookup. The extra filter keeps the "active entries only" behaviour the helper has no
+				// argument for; it is a hardcoded literal, never anything coming from the document.
+				// Only 7 arguments: the 8th ($useCache) does not exist on Dolibarr 19. From 19 on the
+				// core caches on [table][key][fieldid] only, so the entity and the filter above are not
+				// part of the cache key; harmless here, an import reads the dictionary in one entity
+				// with one filter.
+				$paymentModeId = (int) dol_getIdFromCode($db, $dolibarrPaymentCode, 'c_paiement', 'code', 'id', 1, " AND active = 1");
 
-				$resql = $db->query($sql);
-				if ($resql && $db->num_rows($resql) == 1) {
-					$obj = $db->fetch_object($resql);
-					$supplierInvoice->mode_reglement_id = (int) $obj->id;
+				if ($paymentModeId > 0) {
+					$supplierInvoice->mode_reglement_id = $paymentModeId;
 					$messages[] = 'Payment method mapped from UNTDID 4461 code ' . $untdidCode . ' to Dolibarr code ' . $dolibarrPaymentCode . '.';
 				} else {
+					dol_syslog('CommonProtocol::_applyPaymentInfoToSupplierInvoice no active c_paiement entry with code ' . $dolibarrPaymentCode . ' for the current entity', LOG_NOTICE);
 					$messages[] = 'Payment method code ' . $dolibarrPaymentCode . ' (from UNTDID 4461 code ' . $untdidCode . ') not found or not active in Dolibarr dictionary, left empty.';
 				}
 			} else {

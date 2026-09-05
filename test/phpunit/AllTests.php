@@ -117,6 +117,8 @@ class AllTests
 		$suite->addTestSuite('CIITextEscapingTest');
 		require_once dirname(__FILE__).'/CompatShimReloadTest.php';
 		$suite->addTestSuite('CompatShimReloadTest');
+		require_once dirname(__FILE__).'/DefaultProductRoutingResetTest.php';
+		$suite->addTestSuite('DefaultProductRoutingResetTest');
 		require_once dirname(__FILE__).'/EInvoicingSamplesTest.php';
 		$suite->addTestSuite('EInvoicingSamplesTest');
 		require_once dirname(__FILE__).'/HeaderChargeLineTest.php';
@@ -149,6 +151,8 @@ class AllTests
 		$suite->addTestSuite('SkipB2CPrecheckTest');
 		require_once dirname(__FILE__).'/StatusComboMarkupTest.php';
 		$suite->addTestSuite('StatusComboMarkupTest');
+		require_once dirname(__FILE__).'/SupportExportTest.php';
+		$suite->addTestSuite('SupportExportTest');
 		require_once dirname(__FILE__).'/SupplierInvoiceHelperTest.php';
 		$suite->addTestSuite('SupplierInvoiceHelperTest');
 		require_once dirname(__FILE__).'/TransmittedLockTest.php';

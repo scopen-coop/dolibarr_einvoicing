@@ -217,11 +217,24 @@ function thirdpartyidprof($object)
 }
 
 /**
- * removeAllSpaces
+ * Remove every space of an identifier, whatever kind of space it is.
  *
- * @param  ?string $str string to be cleaned
- * @param  ?string $original_encoding original encoding
- * @return string
+ * French people write a long number in groups to read it back - SIREN "844 431 239", SIRET
+ * "844 431 239 00020", VAT number "FR 43 844431239" - and a value copied from a web page or from a
+ * PDF very often carries a non-breaking space (U+00A0), a thin space or a zero-width character
+ * rather than the ordinary one. None of them belongs to the identifier, and a '/\s+/' pattern
+ * written without the /u modifier sees none of them.
+ *
+ * This is the one and only place where the module strips those spaces, so the identifier it emits
+ * (idprof(), the routing id sent to the platform) and the identifier it checks back
+ * (EInvoicing::getSellerCommunicationURI() and the configuration pre-checks) are always cleaned the
+ * same way. It lives here, in the module library, rather than in a class: idprof() and the provider
+ * classes call it as a free function, and it needs no object to do its job. See the deprecated
+ * EInvoicing::removeSpaces(), which now delegates here.
+ *
+ * @param  ?string $str					String to be cleaned. null is accepted and gives ''.
+ * @param  ?string $original_encoding	Encoding of $str, null to detect it. The result is given back in that same encoding.
+ * @return string						Cleaned up string
  */
 function removeAllSpaces($str, $original_encoding = null)
 {
@@ -229,28 +242,52 @@ function removeAllSpaces($str, $original_encoding = null)
 	if ($str === null) {
 		$str = '';
 	}
+	$str = (string) $str;
+	if ($str === '') {
+		return '';
+	}
+
+	// mbstring is only recommended by Dolibarr, never required: without it we still strip what the
+	// Unicode pattern below can strip, instead of fataling on mb_detect_encoding().
+	$hasmbstring = (function_exists('mb_detect_encoding') && function_exists('mb_convert_encoding'));
+
 	// find encoding
-	if ($original_encoding === null) {
+	if ($original_encoding === null && $hasmbstring) {
 		$original_encoding = mb_detect_encoding($str, mb_detect_order(), true) ?: 'UTF-8';
 	}
 
-	$is_utf8 = (strtoupper($original_encoding) === 'UTF-8');
-	if (!$is_utf8) {
-		$str = mb_convert_encoding($str, 'UTF-8', $original_encoding);
+	// Convert to UTF-8 only when the encoding is known and we are able to convert: everything below works
+	// on UTF-8. The encoding to restore is held in its own variable rather than in a boolean, so that it
+	// is plainly a string on both conversions below - mb_convert_encoding() takes no null.
+	$sourceencoding = ($hasmbstring && $original_encoding !== null && strtoupper($original_encoding) !== 'UTF-8') ? $original_encoding : '';
+	if ($sourceencoding !== '') {
+		$str = mb_convert_encoding($str, 'UTF-8', $sourceencoding);
 	}
 
 	// this transform '&nbsp;', '&ensp;', '&emsp;', '&thinsp;' etc. in real spaces Unicode
-	$str = html_entity_decode($str, ENT_QUOTES | ENT_HTML5, 'UTF-8');
-
-	// suppress via Regex
-	$str = preg_replace('/[\p{Z}\s\x{200B}-\x{200D}\x{FEFF}]+/u', '', $str);
-
-	// restore encoding
-	if (!$is_utf8) {
-		$str = mb_convert_encoding($str, $original_encoding, 'UTF-8');
+	$decoded = html_entity_decode($str, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+	// Without ENT_SUBSTITUTE, html_entity_decode() answers '' on a string that is not valid UTF-8.
+	// Keep the bytes we were given rather than losing the identifier altogether.
+	if ($decoded !== '') {
+		$str = $decoded;
 	}
 
-	return $str;
+	// suppress via Regex
+	$cleaned = preg_replace('/[\p{Z}\s\x{200B}-\x{200D}\x{FEFF}]+/u', '', $str);
+	if ($cleaned === null) {
+		// The /u modifier makes preg_replace() answer null on a string that is not valid UTF-8. Fall
+		// back to the ASCII-only strip, so a badly encoded identifier is at worst cleaned the way the
+		// deprecated EInvoicing::removeSpaces() used to clean it, and never returned as null.
+		$cleaned = preg_replace('/\s+/', '', $str);
+	}
+	$str = ($cleaned === null ? $str : $cleaned);
+
+	// restore encoding
+	if ($sourceencoding !== '') {
+		$str = mb_convert_encoding($str, $sourceencoding, 'UTF-8');
+	}
+
+	return (string) $str;
 }
 
 
@@ -258,6 +295,14 @@ function removeAllSpaces($str, $original_encoding = null)
 /**
  * Return the full path of the directory where a module (or an object of a module) stores its files.
  * Path may depends on the entity if a multicompany module is enabled.
+ *
+ * Since Dolibarr 20.0.0 the core getMultidirOutput() takes the four arguments this module needs, so
+ * the call is simply handed over to it and the module benefits from every later core fix. On
+ * Dolibarr 18 and 19 the core function only accepts ($object, $module) and knows neither $forobject
+ * nor $mode, hence the backported body kept below as a fallback.
+ *
+ * The version guard is placed here, and not at the four call sites, so that they keep a single entry
+ * point and there is exactly one place to move (or drop) when the supported version floor rises.
  *
  * @param 	CommonObject|BlockedLog|null	$object 	Dolibarr common object.
  * @param 	string 							$module 	Override object element, for example to use 'mycompany' instead of 'societe'
@@ -268,6 +313,15 @@ function removeAllSpaces($str, $original_encoding = null)
 function getMultidirOutputCompat($object, $module = '', $forobject = 0, $mode = 'output')
 {
 	global $conf;
+
+	// version_compare() rather than a (float) cast: DOL_VERSION carries development suffixes
+	// ('a.b.c-alpha', 'a.b.c-beta', 'a.b.c-rcX', see filefunc.inc.php) that a cast flattens, so
+	// (float) '20.0.0-alpha' is exactly 20.0 and would hand a pre-release snapshot over to a core
+	// signature that may not be there yet. version_compare() sorts those suffixed versions below
+	// 20.0.0 and keeps them on the backport, which is the safe side.
+	if (version_compare(DOL_VERSION, '20.0.0', '>=')) {
+		return getMultidirOutput($object, $module, $forobject, $mode);
+	}
 
 	$subdirectory = '';
 	if (!is_object($object) && empty($module)) {

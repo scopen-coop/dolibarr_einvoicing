@@ -27,6 +27,7 @@
  */
 
 require_once __DIR__ . '/../protocols/ProtocolManager.class.php';
+dol_include_once('einvoicing/lib/einvoicing.lib.php');	// removeAllSpaces(), used to normalize an electronic address
 
 
 /**
@@ -387,7 +388,7 @@ abstract class AbstractPDPProvider
 	 */
 	protected static function normalizeAddressingIdentifier($identifier)
 	{
-		$identifier = preg_replace('/\s+/', '', (string) $identifier);
+		$identifier = removeAllSpaces((string) $identifier);
 
 		$reg = array();
 		if (preg_match('/^[0-9]{4}:(.+)$/', $identifier, $reg)) {
@@ -922,10 +923,14 @@ abstract class AbstractPDPProvider
 	 * persisted in the API call log, whatever its shape: PHP array, application/x-www-form-urlencoded
 	 * string (OAuth token requests), JSON string, or plain text (left untouched in that last case).
 	 *
+	 * Public because the redaction has a second caller outside the write path: SupportExport
+	 * replays it on everything it puts in a support archive, so that rows written before this
+	 * method existed do not carry their tokens out of the instance.
+	 *
 	 * @param  array<mixed>|string|null $value Value to redact
 	 * @return array<mixed>|string|null Redacted value, same shape as the input
 	 */
-	private static function redactSensitiveData($value)
+	public static function redactSensitiveData($value)
 	{
 		if (is_array($value)) {
 			$redacted = array();

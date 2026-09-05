@@ -55,6 +55,10 @@ $newlang = '';
 // calcul_price_total(), used below to get the amounts of a line from the same place the invoice got
 // them. The protocols reach this file from several entry points, not all of which load the library.
 require_once DOL_DOCUMENT_ROOT.'/core/lib/price.lib.php';
+// FactureLigne, used below to read the line a situation line continues. The class lives in
+// facture.class.php up to Dolibarr 20 and in factureligne.class.php from 21 on, where
+// facture.class.php requires it: this file is the one entry point that works on every version.
+require_once DOL_DOCUMENT_ROOT.'/compta/facture/class/facture.class.php';
 
 // Load EInvoicing class
 $einvoicing = new EInvoicing($db);
@@ -754,15 +758,16 @@ if (!empty($object->situation_counter) && $object->situation_counter > 1
 		if (empty($line->fk_prev_id)) {
 			continue;					// A line that appears in this situation was never invoiced before
 		}
-		$sqlprev = "SELECT total_ht, total_tva FROM " . MAIN_DB_PREFIX . "facturedet WHERE rowid = " . ((int) $line->fk_prev_id);
-		$resqlprev = $db->query($sqlprev);
-		if (!$resqlprev) {
-			dol_syslog("EInvoicing cannot read the previous situation line " . $line->fk_prev_id . ": " . $db->lasterror(), LOG_ERR);
+		// The previous line is read with the class of the core, which is the one that knows the
+		// shape of llx_facturedet. FactureLigne::fetch() answers -1 when the read failed, 0 when the
+		// line is gone and 1 when it is loaded; it is the same method on 18 to 24.
+		$prevline = new FactureLigne($db);
+		$resprev = $prevline->fetch((int) $line->fk_prev_id);
+		if ($resprev < 0) {
+			dol_syslog("EInvoicing cannot read the previous situation line " . $line->fk_prev_id . ": " . $prevline->error, LOG_ERR);
 			continue;
 		}
-		$objprev = $db->fetch_object($resqlprev);
-		$db->free($resqlprev);
-		if (empty($objprev) || (empty($objprev->total_ht) && empty($objprev->total_tva))) {
+		if ($resprev == 0 || (empty($prevline->total_ht) && empty($prevline->total_tva))) {
 			continue;
 		}
 
@@ -778,8 +783,8 @@ if (!empty($object->situation_counter) && $object->situation_counter > 1
 		if (!isset($previousSituations[$keyforvatrate])) {
 			$previousSituations[$keyforvatrate] = array('ht' => 0, 'tva' => 0);
 		}
-		$previousSituations[$keyforvatrate]['ht'] += (float) $objprev->total_ht;
-		$previousSituations[$keyforvatrate]['tva'] += (float) $objprev->total_tva;
+		$previousSituations[$keyforvatrate]['ht'] += (float) $prevline->total_ht;
+		$previousSituations[$keyforvatrate]['tva'] += (float) $prevline->total_tva;
 	}
 
 	foreach ($previousSituations as $keyforvatrate => $alreadyinvoiced) {
@@ -1007,8 +1012,8 @@ $invoiceData = [
 	'totalPrepaidAmount'        => $prepaidAmount,
 
 	'iban_id'                   => $account->id,
-	'iban'                      => $einvoicing->removeSpaces($account->iban),
-	'bic'                       => $einvoicing->removeSpaces($account->bic),
+	'iban'                      => removeAllSpaces($account->iban),
+	'bic'                       => removeAllSpaces($account->bic),
 	'accountName'               => $account_proprio,
 	'accountRef'                => $account->ref,
 	'accountLabel'              => $account->label,
@@ -1121,12 +1126,12 @@ if ($mySchemeIdProf == "0002" && strlen($myidprof) != 9) {
 	throw new Exception('BADPROFID: The professional ID ' . $myidprof . ' has type SIREN but length is not 9 characters. Fix this in your company or einvoice module setup page.');
 }
 if ($mysoc->country_code == 'FR' && !empty($mysoc->idprof1) && !empty($mysoc->idprof2)) {
-	if (strpos(preg_replace('/\s+/', '', $mysoc->idprof2), preg_replace('/\s+/', '', $mysoc->idprof1)) !== 0) {
+	if (strpos(removeAllSpaces($mysoc->idprof2), removeAllSpaces($mysoc->idprof1)) !== 0) {
 		throw new Exception('BADVALUEFORSIRENORSIRET: The seller has both a SIREN and SIRET but SIRET does not start with value of SIREN.');
 	}
 }
 if ($buyerParty->country_code == 'FR' && !empty($buyerParty->idprof1) && !empty($buyerParty->idprof2)) {
-	if (strpos(preg_replace('/\s+/', '', $buyerParty->idprof2), preg_replace('/\s+/', '', $buyerParty->idprof1)) !== 0) {
+	if (strpos(removeAllSpaces($buyerParty->idprof2), removeAllSpaces($buyerParty->idprof1)) !== 0) {
 		throw new Exception('BADVALUEFORSIRENORSIRET: The buyer has both a SIREN "' . $buyerParty->idprof1 . '" and SIRET "' . $buyerParty->idprof2 . '" but SIRET does not start with value of SIREN.');
 	}
 }
