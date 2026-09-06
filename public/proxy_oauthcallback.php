@@ -122,7 +122,7 @@ if ($state) { // Used to store scope and anti-csrf value. The scope is stored in
 }
 
 $providertouse = getDolGlobalString('EINVOICING_PDP');
-if (GETPOSt('proxy') && getDolGlobalString('EINVOICING_SUPERPDP_VIAPARTNER') == 'proxy') {	// If using a proxy is requested and we are on a server proxy
+if (GETPOST('proxy') && getDolGlobalString('EINVOICING_SUPERPDP_VIAPARTNER') == 'proxy') {	// If using a proxy is requested and we are on a server proxy
 	$providertouse = strtoupper(GETPOST('proxy', 'aZ09'));
 }
 

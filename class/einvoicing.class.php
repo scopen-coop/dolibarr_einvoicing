@@ -61,11 +61,10 @@ class EInvoicing
 	/**
 	 * Ids of the customer invoices whose validation happened during the current request.
 	 *
-	 * The hook that generates the e-invoice, afterPDFCreation(), is called for every rebuild of the
-	 * invoice PDF and cannot tell what asked for it. The BILL_VALIDATE trigger can: it runs inside
-	 * Facture::validate(), before the caller regenerates the document, and it runs for no other
-	 * reason. Marking the invoice there is what lets the hook recognise the generation that follows a
-	 * validation - the only one EINVOICING_AUTO_SEND_ON_GENERATION is meant to transmit.
+	 * afterPDFCreation() runs for every rebuild of the invoice PDF and cannot tell what asked for it;
+	 * the BILL_VALIDATE trigger runs inside Facture::validate() and for no other reason. Marking the
+	 * invoice there is what lets the hook recognise the generation that follows a validation, the only
+	 * one EINVOICING_AUTO_SEND_ON_GENERATION is meant to transmit.
 	 *
 	 * @var int[]
 	 */
@@ -107,6 +106,12 @@ class EInvoicing
 		self::STATUS_IGNORE,
 		self::STATUS_IGNORE_2
 	];
+
+	/**
+	 * Processing rule under which a platform files a flow as B2B international: the lifecycle then
+	 * belongs to e-reporting and the platform refuses every status but the payment event (issue #799).
+	 */
+	const PROCESSING_RULE_INTERNATIONAL = 'B2BInt';
 
 	// PDP / PA normalized statuses
 	// public const STATUS_DEPOSITED           = 200;
@@ -752,6 +757,58 @@ class EInvoicing
 	}
 
 	/**
+	 * Get the path of the CII XML file of an invoice, if the invoice has one to read.
+	 *
+	 * Not getEInvoiceFilePath(): that one names the file of the protocol currently configured, so it
+	 * answers a PDF under Factur-X. Only the XML is concerned here, because it is the only one of the
+	 * two Dolibarr cannot show - a PDF it previews on its own. An invoice generated before the setup
+	 * was changed keeps its XML, which stays readable whatever the protocol says today.
+	 *
+	 * @param 	?string 	$invoiceRef 	The reference of the invoice.
+	 * @return 	string						Full path of the XML, empty string if the invoice has none.
+	 */
+	public function getEInvoiceXmlFilePath($invoiceRef)
+	{
+		global $conf;
+
+		$filename = dol_sanitizeFileName($invoiceRef);
+		$path = $conf->invoice->multidir_output[$conf->entity] . '/' . $filename . '/' . $filename . '_cii.xml';
+
+		return is_readable($path) ? $path : '';
+	}
+
+	/**
+	 * Get the path of the CII XML received for a supplier invoice, if there is one to read.
+	 *
+	 * The file is the one the reception saved beside the supplier invoice, so the naming is the one of
+	 * CIIProtocol::saveEInvoiceFileToSupplierInvoiceAttachment(): the reference of the supplier names
+	 * the file, and the reference of the invoice names its directory. A document received in Factur-X
+	 * is a PDF, which Dolibarr previews on its own and which is not concerned here.
+	 *
+	 * @param 	FactureFournisseur 	$supplierInvoice 	Supplier invoice the document was received for.
+	 * @return 	string									Full path of the XML, empty string if there is none.
+	 */
+	public function getSupplierEInvoiceXmlFilePath($supplierInvoice)
+	{
+		global $conf;
+
+		if (!is_object($supplierInvoice) || empty($supplierInvoice->ref) || empty($supplierInvoice->ref_supplier)) {
+			return '';
+		}
+
+		$base = $conf->fournisseur->dir_output . '/facture/';
+		$ref = dol_sanitizeFileName($supplierInvoice->ref);
+		$filename = dol_sanitizeFileName($supplierInvoice->ref_supplier . '_einvoice.xml');
+
+		$path = $base . get_exdir($supplierInvoice->id, 2, 0, 0, $supplierInvoice, 'invoice_supplier') . $ref . '/' . $filename;
+		if (is_readable($path)) {
+			return $path;
+		}
+
+		return '';
+	}
+
+	/**
 	 * Get internal Dolibarr status code from PDP/PA status label (only for validation statuses 'Error', 'Pending', 'Ok', other status like lifecycle codes are normalized and with the same code in both systems)
 	 *
 	 * @param string $label PDP/PA status label can be 'Error', 'Pending', 'Ok', etc.
@@ -899,22 +956,59 @@ class EInvoicing
 	}
 
 	/**
+	 * Processing rule the platform computed for the flow that brought an invoice in ('B2B', 'B2BInt',
+	 * 'NotApplicable', ...). Read from the invoice flow, never from its lifecycle flows; a row synchronized
+	 * before the column existed falls back on the raw metadata kept in debug mode.
+	 *
+	 * @param	int		$elementId		Id of the invoice
+	 * @param	string	$elementType	Element type ('invoice_supplier')
+	 * @return	string					The rule, empty when unknown
+	 */
+	public function getFlowProcessingRule($elementId, $elementType)
+	{
+		$sql = "SELECT processing_rule, response_for_debug FROM " . $this->db->prefix() . "einvoicing_document";
+		$sql .= " WHERE fk_element_type = '" . $this->db->escape($elementType) . "'";
+		$sql .= " AND fk_element_id = " . (int) $elementId;
+		$sql .= " AND COALESCE(flow_syntax, '') <> 'CDAR'";
+		$sql .= " ORDER BY rowid DESC";
+		$sql .= $this->db->plimit(1);
+
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			dol_syslog(__METHOD__ . ' ' . $this->db->lasterror(), LOG_ERR);
+			return '';
+		}
+		$obj = $this->db->fetch_object($resql);
+		$this->db->free($resql);
+		if (!$obj) {
+			return '';
+		}
+		if (!empty($obj->processing_rule)) {
+			return (string) $obj->processing_rule;
+		}
+		$metadata = empty($obj->response_for_debug) ? null : json_decode($obj->response_for_debug, true);
+
+		return (is_array($metadata) && !empty($metadata['processingRule'])) ? (string) $metadata['processingRule'] : '';
+	}
+
+	/**
+	 * Whether the platform filed the invoice under B2B international (see PROCESSING_RULE_INTERNATIONAL).
+	 *
+	 * @param	int		$elementId		Id of the invoice
+	 * @param	string	$elementType	Element type ('invoice_supplier')
+	 * @return	bool					True when no lifecycle status will be accepted on it
+	 */
+	public function isInternationalFlow($elementId, $elementType)
+	{
+		return $this->getFlowProcessingRule($elementId, $elementType) === self::PROCESSING_RULE_INTERNATIONAL;
+	}
+
+	/**
 	 * Statuses a user may still send by hand on an invoice received through the platform.
 	 *
-	 * The sendable list is narrowed by what the platform already accepted for that invoice. A status
-	 * it accepted is not proposed again. "Refused" (210) ends the exchange - an invoice sent back to
-	 * its vendor is not going to be paid, so nothing else is owed on it. "Approved" (205) ends nothing:
-	 * the normal order of things is to approve an invoice and then pay it, and "Payment transmitted"
-	 * (211) is precisely what is sent afterwards. An approved invoice can no longer be refused either.
-	 *
-	 * The order matters both ways: "Payment transmitted" is only offered once that approval has been
-	 * accepted by the platform, and never on a draft. Announcing the payment of an invoice nobody has
-	 * answered yet - or of one Dolibarr does not owe anything on - runs the lifecycle backwards.
-	 *
-	 * One last thing narrows the list beyond that history: a credit note correcting an invoice we
-	 * refused cannot be accepted, since the invoice it credits owes nothing (issue #594, see
-	 * SupplierInvoiceHelper::refusedSourceOfCreditNote()). Refusing it stays offered - that is what the
-	 * document is for here - as do the statuses that settle nothing, like "Disputed" or "Suspended".
+	 * A status already accepted is not proposed again, "Refused" (210) ends the exchange, and "Payment
+	 * transmitted" (211) needs an accepted "Approved" (205) on a non-draft invoice. A credit note
+	 * correcting an invoice we refused cannot be accepted either (issue #594).
 	 *
 	 * @param	int		$elementId		Id of the invoice
 	 * @param	string	$elementType	Element type ('invoice_supplier')
@@ -925,6 +1019,10 @@ class EInvoicing
 	public function getSendableStatusesForReceivedInvoice($elementId, $elementType)
 	{
 		if ($this->hasSentStatusMessage($elementId, $elementType, self::STATUS_REFUSED, 1)) {
+			return array();
+		}
+		// Filed as B2B international by the platform: no lifecycle answer will be accepted (issue #799).
+		if ($this->isInternationalFlow($elementId, $elementType)) {
 			return array();
 		}
 
@@ -942,10 +1040,7 @@ class EInvoicing
 
 		// The lifecycle runs in one direction: a received invoice is first answered - approved (205) or
 		// refused (210) - and only then paid, so "Payment transmitted" (211) is offered once that answer
-		// has been given and accepted by the platform, not before. Offering it right away announced the
-		// payment of an invoice we had said nothing about, and let it be sent while the answer was still
-		// pending or had been rejected by the platform - which is when the button is the most tempting,
-		// and the most wrong.
+		// has been accepted by the platform, not while it is still pending or was rejected.
 		if (!$approved) {
 			unset($statuses[self::STATUS_PAYMENT_SENT]);
 		}
@@ -1242,12 +1337,10 @@ class EInvoicing
 	/**
 	 * Tell whether a value returned by the French National Business Registry API is masked.
 	 *
-	 * Units that exercised their right to opposition (art. A123-96 of the French commercial code)
-	 * carry the "partial diffusion" status: they are still returned by the API, but each protected
-	 * field is replaced by the literal string "[NON-DIFFUSIBLE]". Cross-checking such a placeholder
-	 * against the third party record can only ever mismatch, so the field must be skipped instead of
-	 * being reported. Fields that stay public for those units (SIREN, commune, administrative status)
-	 * keep being checked.
+	 * A unit under "partial diffusion" (art. A123-96 of the French commercial code) is still returned by
+	 * the API, but each protected field holds the literal string "[NON-DIFFUSIBLE]": cross-checking that
+	 * against the third party record can only ever mismatch, so the field is skipped instead of being
+	 * reported. The fields that stay public (SIREN, commune, administrative status) keep being checked.
 	 *
 	 * @param  string|null $value   Value read from the API response
 	 * @return bool                 True when the field is masked and must not be cross-checked
@@ -1261,9 +1354,7 @@ class EInvoicing
 	 * Check the thirdparty existence and active status via the French National Business Registry API (data.gouv.fr).
 	 * Search is performed by company name; the returned SIREN is then cross-checked against idprof1.
 	 * No authentication required. API rate limit: 7 req/s.
-	 *
-	 * This check is optional and non-blocking: an API timeout or unavailability is
-	 * silently ignored (warning logged, no error raised to the user).
+	 * Optional and non-blocking: an API timeout or unavailability is silently ignored (warning logged).
 	 * Only runs when EINVOICING_ENABLE_API_VALIDATION constant is set to 1.
 	 *
 	 * @param Societe $thirdparty   Thirdparty object to check
@@ -1393,14 +1484,9 @@ class EInvoicing
 	/**
 	 * Check that the setup of the instance can produce a conformant carrier for the selected format.
 	 *
-	 * Only Factur-X is concerned: a Factur-X file is a PDF/A-3 file carrying the XML (ISO 19005-3), and
-	 * the module can only embed the XML into the PDF the core produced - it cannot repair its pages. At
-	 * the default PDF_USE_A = 0 that PDF is drawn with the Standard 14 fonts, which are not embedded,
-	 * while 6.2.11.4.1 requires every font used for rendering to be: the result is rejected by any PDF/A
-	 * validator (veraPDF), whatever the container of the module does right, and the invoice is not a
-	 * conformant Factur-X. The setting belongs to the core and is only read here, never written: the
-	 * user is told to raise it, in "Home - Setup - PDF", or to use CII - which is the recommended format
-	 * and needs no PDF at all.
+	 * Only Factur-X is concerned: at the core default PDF_USE_A = 0 the Standard 14 fonts are not
+	 * embedded, while ISO 19005-3 6.2.11.4.1 requires every rendering font to be, so veraPDF rejects the
+	 * file. The setting belongs to the core, so the user is told to raise it, or to use CII.
 	 *
 	 * @return array{res:int, message:string} Returns array with 'res' (1 when nothing to report, 0 on warning) and info 'message'
 	 */
@@ -2382,15 +2468,10 @@ class EInvoicing
 	/**
 	 * Combo of the products of a vendor, to pick the default product of an import.
 	 *
-	 * A product bought from a vendor has to be flagged "to buy"; whether it is on sale is none of our
-	 * business, and a product created by a previous import never is. select_produits_fournisseurs()
-	 * filters on that purchase status, but reads it from the global $status, which the calling page is
-	 * free to have set to anything: force it here, and give it back, so the combo cannot silently come
-	 * back empty.
-	 *
-	 * The field also follows the two setup options the core uses for its own product combos:
-	 * PRODUIT_USE_SEARCH_TO_SELECT (search form instead of a combo, with its minimum number of
-	 * characters) and PRODUIT_LIMIT_SIZE (number of products shown in a select).
+	 * select_produits_fournisseurs() filters on the "to buy" status but reads it from the global $status,
+	 * which the calling page is free to have set to anything: it is forced here, and given back, so the
+	 * combo cannot silently come back empty. PRODUIT_USE_SEARCH_TO_SELECT and PRODUIT_LIMIT_SIZE are
+	 * honoured as the core does for its own product combos.
 	 *
 	 * @param	Form	$form		Form handler
 	 * @param	int		$socid		Vendor id
@@ -2644,11 +2725,10 @@ class EInvoicing
 	/**
 	 * Whether an invoice is locked because it was already transmitted to the Access Point.
 	 *
-	 * Based on the REAL PA state (a flow_id was assigned on the first successful submission and is never
-	 * cleared), not on the Dolibarr syncstatus which is reset to GENERATED when the e-invoice is
-	 * regenerated. A transmitted invoice is immutable (you correct it with a credit note / corrective
-	 * invoice), so by default we block re-sending, regenerating and re-editing it. The operator can opt
-	 * out (e.g. to test PA retry behaviour) by setting EINVOICING_ALLOW_RESEND_TRANSMITTED.
+	 * Based on the real PA state (a flow_id, assigned on the first successful submission and never
+	 * cleared), not on the Dolibarr syncstatus which is reset to GENERATED on every regeneration. A
+	 * transmitted invoice is immutable, so re-sending, regenerating and re-editing are blocked unless
+	 * EINVOICING_ALLOW_RESEND_TRANSMITTED is set.
 	 *
 	 * @param 	int 	$invoiceId 	Invoice id
 	 * @param 	?string $invoiceRef Invoice ref (fallback if id is 0)
@@ -2667,21 +2747,10 @@ class EInvoicing
 	 * Gate generation/transmission on the recipient being reachable in the Approved Platforms directory.
 	 *
 	 * Only enforced when EINVOICING_REQUIRE_ROUTABLE_RECIPIENT is on (off by default, opt-in). A recipient
-	 * that is absent from the directory, present without an active routing line, or present without the
-	 * very address this invoice is addressed to, would be rejected by the platform with a routing error
-	 * (fr:213): blocking generation/sending avoids reaching that error state. That option has a second,
-	 * stricter, value (2) that also blocks a non-conclusive directory answer.
-	 *
-	 * What is checked is the electronic address the document will carry (BT-49), read through the same
-	 * getBuyerCommunicationURI() the generation uses, so the gate and the document can never disagree.
-	 * When that address is empty - only reachable with EINVOICING_BLOCK_INVOICE_NO_ROUTING_ID and no
-	 * routing recorded, a configuration the required-information checks already stop - the check falls
-	 * back on any line declared for the SIREN.
+	 * the directory does not route to the BT-49 of the document (getBuyerCommunicationURI()) is a fr:213.
 	 *
 	 * Fails open (ok=1) whenever the check cannot be trusted, so it never blocks unexpectedly: option off,
-	 * provider without a directory lookup (status unsupported), directory call error, a directory answer that
-	 * does not report the line status (status undetermined, unless the option is set to its strict value), or
-	 * a recipient with no SIREN (handled by the standard required-information checks).
+	 * lookup unsupported, call error, or an undetermined answer unless the option is at its strict value 2.
 	 *
 	 * @param 	Facture 	$object 	Invoice
 	 * @return 	array{ok:int,status:string,message:string}	ok=0 only when the recipient is confirmed not routable.
@@ -2941,13 +3010,8 @@ class EInvoicing
 	 * Create or replace the default routing for a thirdparty.
 	 *
 	 * This method enforces a 1 → 1 relationship between a thirdparty and its active default routing:
-	 * - Only one active default routing can exist per thirdparty at any given time
 	 * - Any existing routing(s) for this thirdparty are automatically deleted before insertion
 	 * - The new routing is marked as active (active = 1) and default (is_default = 1)
-	 *
-	 * Note: Future versions may support true 1 → N routing management with:
-	 * - Multiple concurrent routings per thirdparty
-	 * - Switching default routing without deletion
 	 *
 	 * @param 	int    $fk_soc   		Thirdparty ID
 	 * @param 	string $routing_id		Routing ID
@@ -3422,11 +3486,10 @@ class EInvoicing
 	/**
 	 * Update validation information of an existing lifecycle status message.
 	 *
-	 * If the message being validated is an outbound "Refused" status message for a supplier
-	 * invoice, confirmed as accepted ('Ok') by the platform, this also triggers the abandon of
-	 * the related Dolibarr supplier invoice (see SupplierInvoiceHelper::onOutboundStatusMessageValidated()).
-	 * This side effect is best-effort: any failure in it is logged but never changes the return
-	 * value of this method, whose only responsibility is to persist the validation information.
+	 * An outbound "Refused" status message for a supplier invoice, confirmed as accepted ('Ok') by the
+	 * platform, also triggers the abandon of the related Dolibarr supplier invoice
+	 * (see SupplierInvoiceHelper::onOutboundStatusMessageValidated()). This side effect is best-effort:
+	 * any failure in it is logged but never changes the return value of this method.
 	 *
 	 * @param int    $rowid					ID
 	 * @param string $statusMessage         Optional detailed status message or comment
@@ -3640,18 +3703,10 @@ class EInvoicing
 	/**
 	 * Calculate TVA intracommunity number for a thirdparty if missing, from the professional ID
 	 *
-	 * The core does exactly this, in Societe::calculateVATNumberFromProperties(), since Dolibarr 24.
-	 * This method is kept as the entry point of the module - it is what buildinvoicelines.inc.php calls
-	 * to fill BT-31 and BT-48 - but it no longer computes anything itself: it hands the thirdparty over
-	 * to the core when the core knows how, and to the faithful backport of compat/societe.lib.php on the
-	 * versions that do not have it yet. The presence of the method is what decides, not a version test:
-	 * the same module runs on 18 to 24, and a backport of the method into a maintenance release would
-	 * then be used as soon as it is there.
-	 *
-	 * The copy this replaced was wrong twice, and both defects reached the XML: the key was concatenated
-	 * raw, where the core pads it to two digits, so the roughly one SIREN in ten whose key is below 10
-	 * got a 12 character number instead of 13; and the SIRET to SIREN fallback cast to int, which eats
-	 * the leading zero of a SIREN that starts with one.
+	 * Delegates to the core Societe::calculateVATNumberFromProperties() when it exists (Dolibarr 24 on,
+	 * or any release it gets backported into - the presence of the method decides, not a version test),
+	 * and to compat/societe.lib.php otherwise. Kept as the entry point of the module: it is what
+	 * buildinvoicelines.inc.php calls to fill BT-31 and BT-48.
 	 *
 	 * @param mixed $thirdparty		Third party
 	 * @return string
@@ -3684,12 +3739,9 @@ class EInvoicing
 			return;
 		}
 
-		// Files at the root of the directory only, which is the whole of what the module writes there:
-		// the working copies of an incoming document (in_*.xml, in_*_readable.pdf), the CDAR being sent
-		// (cdar_*.xml), the einvoice.* diagnostics and the sample invoices of the setup page are all
-		// flat. A subdirectory found here was put by something else and is not ours to remove, so the
-		// listing stays non recursive - and dol_dir_list() also skips the dot files the core protects,
-		// which a raw scandir() loop happily deleted.
+		// Files at the root only: everything the module writes there is flat, so a subdirectory found here
+		// is not ours to remove. dol_dir_list() also skips the dot files the core protects, which a raw
+		// scandir() loop happily deleted.
 		$files = dol_dir_list($tempDir, 'files', 0);
 		foreach ($files as $file) {
 			// Exact delete: the name comes from the listing and must not be read back as a glob mask.
@@ -3857,14 +3909,9 @@ class EInvoicing
 	/**
 	 * Split a Dolibarr postal address into the three lines EN 16931 has for it.
 	 *
-	 * Dolibarr keeps a postal address as one free text field where the user separates the lines with
-	 * newlines, while the norm gives an address three separate terms - BT-35/36/162 for the seller,
-	 * BT-50/51/163 for the buyer, BT-75/76/165 for the deliver-to party. Handing the whole field to
-	 * the first of them puts raw newlines inside a single element, which the receiving side renders
-	 * as one run-on line (issue #683).
-	 *
-	 * Nothing is dropped: the norm stops at three lines, so a fourth and beyond join the third,
-	 * separated by a comma, rather than disappearing from the document.
+	 * Dolibarr keeps the address as one free text field where the norm gives three terms (BT-35/36/162,
+	 * BT-50/51/163, BT-75/76/165): handing the whole field to the first one renders as one run-on line
+	 * (issue #683). A fourth line and beyond join the third, separated by a comma.
 	 *
 	 * @param	string	$address	Address as Dolibarr stores it, lines separated by newlines
 	 * @return	string[]			Exactly three lines, empty strings when the address has fewer
@@ -3884,9 +3931,8 @@ class EInvoicing
 	/**
 	 * Generates the deposit, standard and credit note CII sample-invoice chain and returns the normalized XML of each.
 	 *
-	 * Generates three sample invoices (deposit, standard, and credit note) using fixed specimen
-	 * third parties to ensure consistent, deterministic output across test runs. The XML output
-	 * is normalized to exclude non-deterministic parts like timestamps and dates.
+	 * Uses fixed specimen third parties to ensure consistent, deterministic output across test runs.
+	 * The XML output is normalized to exclude non-deterministic parts like timestamps and dates.
 	 *
 	 * @used-by	regenerate_einvoicing_fixtures.php For fixture generation
 	 * @used-by	EInvoicingSamplesTest.php For comparison and regression testing
@@ -3938,12 +3984,9 @@ class EInvoicing
 		$conf->global->TAX_MODE_SELL_PRODUCT = 'invoice';
 		$conf->global->TAX_MODE_SELL_SERVICE = 'payment';
 
-		// Same reason for the language: CommonProtocol::generateSampleInvoice() builds the specimen
-		// with the ambient $langs, so the free text it carries (BT-20 payment terms, BT-22 notes,
-		// line descriptions) follows whatever language the instance runs in. The reference fixtures
-		// would then match only on an instance set to the language of whoever generated them.
-		// Pin en_US here, so the specimen is the same everywhere; the interactive sample generation
-		// keeps following the user language, it does not go through this method.
+		// Same reason for the language: generateSampleInvoice() builds the specimen with the ambient
+		// $langs, so its free text would follow the instance language and the reference fixtures would
+		// only match there. Pinned to en_US; the interactive sample generation does not come through here.
 		$savLangs = $langs;
 		$langs = new Translate('', $conf);
 		$langs->setDefaultLang('en_US');

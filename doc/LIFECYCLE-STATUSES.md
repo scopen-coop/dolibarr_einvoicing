@@ -176,6 +176,10 @@ Skipped when the invoice never reached the platform, or when its deposit was ref
   `$mysoc->country_code == 'FR'`.
 - **The status list is narrowed by history**, not by a state machine: a status already accepted by the
   platform is not offered again; 210 closes everything; 205 closes only the refusal.
+- **A flow the platform filed as B2B international** (`processingRule` = `B2BInt` in the flow metadata,
+  kept in `llx_einvoicing_document.processing_rule`) gets no lifecycle answer at all: the platform
+  refuses every status but the payment event, so nothing is offered and the card says why. A French
+  vendor gets filed that way when it has no reception address in the directory (issue #799).
 
 ## 5. Sources
 

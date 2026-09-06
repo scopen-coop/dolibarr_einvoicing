@@ -199,19 +199,9 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 							// Optionally transmit to the Access Point right after generation (opt-in + idempotent) and if not yet generated.
 							// Without this, validation only generates the Factur-X; the invoice is never sent to the
 							// PA (transmission was a manual "send_to_pdp" click only).
-							// Restricted to the generation that follows a validation, which is what the option says
-							// it does. This hook is called for every rebuild of the invoice PDF, and several of them
-							// happen long after the validation and with nobody asking for a transmission: recording a
-							// payment rebuilds the document from inside Paiement::create(), and so do the "Generate"
-							// button of the invoice card and any mass/cron PDF rebuild. On an invoice validated before
-							// the module was set up - or deliberately left to be sent by hand - the first of those
-							// rebuilds used to deposit it at the PA on its own, months after its date, and to unlock
-							// the cash-in status (212) that the very same payment then reported.
-							// Then two more guards, because one is not enough: 'transmitted' reads the syncstatus,
-							// which generateInvoice() just reset to GENERATED a few lines above, so it stops seeing a
-							// transmission from the second regeneration on. isTransmittedLockActive() reads the
-							// flow_id, which the first submission assigned and nothing clears, so it holds for good
-							// (and honors EINVOICING_ALLOW_RESEND_TRANSMITTED like the manual send does).
+							// Restricted to the generation following a validation: the other PDF rebuilds (payment,
+							// Generate button, mass/cron) must not deposit the invoice at the PA. The flow_id lock is
+							// the reliable guard, as generateInvoice() just reset the syncstatus to GENERATED above.
 							if (getDolGlobalString('EINVOICING_AUTO_SEND_ON_GENERATION') && EInvoicing::isInvoiceValidatedInThisRequest($invoiceObject->id)
 								&& empty($currentStatusDetails['transmitted'])
 								&& !$einvoicing->isTransmittedLockActive($invoiceObject->id, $invoiceObject->ref) && $precheckresult >= 0) {
@@ -465,6 +455,13 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 				// after the approval (issue #548).
 				$availableStatuses = $einvoicing->getSendableStatusesForReceivedInvoice($object->id, $object->element);
 
+				// Nothing is offered on a flow the platform filed as B2B international: say why, rather
+				// than letting its HTTP 400 do it on the first click (issue #799).
+				$processingRule = $einvoicing->getFlowProcessingRule($object->id, $object->element);
+				if ($processingRule === EInvoicing::PROCESSING_RULE_INTERNATIONAL) {
+					print '<div class="info">' . $langs->trans('EInvoiceFlowInternationalNoLifecycle', $processingRule) . '</div>';
+				}
+
 				// A button that quietly disappears looks like a bug. Say why the credit note of a refused
 				// invoice cannot be accepted, and name the invoice it credits (issue #594).
 				dol_include_once('einvoicing/class/utils/SupplierInvoiceHelper.class.php');
@@ -475,12 +472,10 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 					print '<div class="info">' . $langs->trans('EInvoiceCreditNoteOfRefusedInvoice', $sourceRef) . '</div>';
 				}
 
-				// Accepting a received invoice validates it in Dolibarr, so on a draft those statuses take
-				// the right the core asks for a validation (fourn/facture/card.php, $usercanvalidate) on
-				// top of the one to edit. Left to the core to render: dolGetButtonAction() drops a
-				// dropdown entry whose perm is empty before Dolibarr 22, and shows it disabled with
-				// "NotEnoughPermissions" after - what it never does is leave a live button that the
-				// action would refuse. A -1 would not do: it is truthy, so the old cores show it enabled.
+				// Accepting a received invoice validates it, so on a draft those statuses also need the right
+				// the core asks for a validation (fourn/facture/card.php, $usercanvalidate). Left to
+				// dolGetButtonAction() to render: an empty perm drops the dropdown entry before Dolibarr 22 and
+				// shows it disabled after. Not -1: it is truthy, so the old cores would show it enabled.
 				$canvalidate = ((!getDolGlobalString('MAIN_USE_ADVANCED_PERMS') && $user->hasRight('fournisseur', 'facture', 'creer'))
 					|| (getDolGlobalString('MAIN_USE_ADVANCED_PERMS') && $user->hasRight('fournisseur', 'supplier_invoice_advance', 'validate')));
 				$isdraft = ((int) $object->status === FactureFournisseur::STATUS_DRAFT);
@@ -641,13 +636,10 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 				}
 			}
 
-			// An invoice already transmitted to the Access Point (a flow_id is assigned, by any provider) is
-			// immutable: re-sending it makes the PA refuse a duplicate, and regenerating it would only reset
-			// the local status and re-open that trap. Block both by default; correct a transmitted invoice
-			// with a credit note / corrective invoice. The operator can opt in (e.g. to test PA retry) via
-			// EINVOICING_ALLOW_RESEND_TRANSMITTED. Based on the persistent flow_id, not the resettable status.
-			// EINVOICING_ALLOW_REGEN_TRANSMITTED keeps regenerate (generate_einvoice) available on a
-			// transmitted-locked invoice for dev/inspection; re-sending (send_to_pdp) stays locked.
+			// An invoice already transmitted (a flow_id is assigned) is immutable: re-sending it makes the PA
+			// refuse a duplicate, and regenerating it would only reset the local status. Block both; correct a
+			// transmitted invoice with a credit note. The lock is based on the persistent flow_id, not on the
+			// resettable status. EINVOICING_ALLOW_RESEND_TRANSMITTED / _ALLOW_REGEN_TRANSMITTED opt out.
 			$lockedActions = getDolGlobalString('EINVOICING_ALLOW_REGEN_TRANSMITTED')
 				? array('send_to_pdp')
 				: array('send_to_pdp', 'generate_einvoice');
@@ -774,6 +766,19 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 				$pdpstatuscode = GETPOSTINT('pdpstatuscode') ?: 0;
 				$statusRaison = GETPOST('statusRaison', 'alpha');
 
+				// The card offers no status on a flow filed as B2B international; a status posted anyway
+				// would only collect the platform's refusal (issue #799).
+				$processingRule = $einvoicing->getFlowProcessingRule((int) $object->id, $object->element);
+				if ($processingRule === EInvoicing::PROCESSING_RULE_INTERNATIONAL) {
+					$message = $langs->trans('EInvoiceFlowInternationalStatusRefused', $processingRule);
+					setEventMessages($message, array(), 'errors');
+					$this->errors[] = $message;
+
+					$db->commit();
+
+					return 0;
+				}
+
 				// If the status we try to set is Approved, check that the invoice we try to approve is not a credit note to correct a supplier invoice that were already refused.
 				// If parent invoice was refused, we must block the Approval because we need to refuse the credit note also.
 				if (in_array($pdpstatuscode, EInvoicing::STATUSES_ACCEPTING_A_DOCUMENT, true)) {
@@ -793,12 +798,10 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 					}
 				}
 
-				// Answering "approved" while the invoice stays a draft tells the vendor and the accounts two
-				// different things about the same document. Validating a received invoice in Dolibarr is
-				// the act of accepting it - that is why the BILL_SUPPLIER_VALIDATE trigger answers 205 by
-				// itself - so the answer given from the card validates it too. Validation comes first: a
-				// status accepted by the platform cannot be taken back, while a validation that fails
-				// (numbering, closed period, ...) must leave the exchange untouched.
+				// Validating a received invoice in Dolibarr is the act of accepting it - that is why the
+				// BILL_SUPPLIER_VALIDATE trigger answers 205 by itself - so an approval given from the card
+				// validates it too. Validation comes first: a status accepted by the platform cannot be taken
+				// back, while a validation that fails (numbering, closed period, ...) must leave it untouched.
 				$sendtheanswer = true;
 				if (in_array($pdpstatuscode, EInvoicing::STATUSES_ACCEPTING_A_DOCUMENT, true) && (int) $object->status === FactureFournisseur::STATUS_DRAFT) {
 					if (!$permissiontovalidate) {
@@ -1592,11 +1595,9 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 	/**
 	 * Build the condition restricting the join on einvoicing_extlinks (aliased 'ext') to a single row.
 	 *
-	 * An element can carry several links: one per provider, and a provider can be registered both
-	 * directly and through a partner. Without this condition every extra link adds a line to the list
-	 * of the core and, because list.php builds its record count on the same FROM clause, the element
-	 * is counted as many times as it has links. The row kept here is the one
-	 * EInvoicing::fetchLastknownInvoiceStatus() would keep, so a list and a card never disagree.
+	 * An element can carry several links (one per provider, registered directly and through a partner), and
+	 * every extra link would duplicate the element in the core list and in its record count. The row kept
+	 * here is the one EInvoicing::fetchLastknownInvoiceStatus() keeps, so a list and a card never disagree.
 	 *
 	 * @param 	'facture'|'invoice_supplier'|'societe'|'product'	$elementtype	Value of einvoicing_extlinks.element_type, which also tells which list of the core is being built
 	 * @return 	string															Condition to append to the ON clause of the join
@@ -1647,12 +1648,9 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 			if (in_array('thirdpartylist', $contexts, true)) {
 				$this->resprints .= ' LEFT JOIN ' . $db->prefix() . "einvoicing_extlinks as ext ON ext.element_id = s.rowid AND ext.element_type = 'societe'" . self::getExtLinkJoinCondition('societe');
 				$this->resprints .= ' LEFT JOIN ' . $db->prefix() . "einvoicing_routing rt ON rt.fk_soc = s.rowid";
-				// A thirdparty can hold several routing identifiers, and a routing row for its default product
-				// on top of them, so joining on fk_soc alone repeats the thirdparty in the list as many times.
-				// The active default routing of type 'thirdparty' is the single row the list must show: it is
-				// the one the card of the thirdparty displays at the top of its list, and the one
-				// EInvoicing::fetchDefaultRouting() answers. The column stays empty for a thirdparty holding
-				// no routing identifier, so no row leaves the list.
+				// A thirdparty can hold several routing rows, so joining on fk_soc alone repeats it in the list.
+				// Keep the active default routing of type 'thirdparty', the row the card and
+				// EInvoicing::fetchDefaultRouting() show. Stays empty, never filtering, when there is none.
 				$this->resprints .= " AND rt.routing_type = 'thirdparty' AND rt.active = 1 AND rt.is_default = 1";
 			}
 
@@ -1693,13 +1691,10 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 			}
 		}
 
-		// The routing identifier is a column of einvoicing_routing, and printFieldListFrom() joins that
-		// table into the thirdparty list only. Read on 'ext', the alias of einvoicing_extlinks, which
-		// holds no such column, the filter turned the page of the core into an SQL error.
-		//
-		// The filter is written on a subquery of its own rather than on the joined row: a thirdparty can
-		// hold several routing identifiers while the list shows only one of them, so a condition on the
-		// joined row would answer 'no result' for every identifier that is not the one displayed.
+		// The routing identifier is a column of einvoicing_routing, joined by printFieldListFrom() into the
+		// thirdparty list only, never on the 'ext' alias (einvoicing_extlinks). Filter on a subquery of its
+		// own, not on the joined row: a thirdparty can hold several routing identifiers while the list shows
+		// only one, so a condition on the joined row would answer 'no result' for all the others.
 		if (in_array('thirdpartylist', $contexts, true) && GETPOST('search_routing_id', 'alpha') !== '') {
 			$this->resprints .= ' AND EXISTS (SELECT 1 FROM ' . $db->prefix() . 'einvoicing_routing as subrt';
 			$this->resprints .= ' WHERE subrt.fk_soc = s.rowid';	// Alias of the thirdparty in the thirdparty list of the core
@@ -1921,12 +1916,12 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 
 			// Einvoice generated or not
 			if (!empty($parameters['arrayfields']['einvoicegenerated']['checked'])) {
-				print_liste_field_titre($langs->transnoentitiesnoconv('EInvoiceFile'), '', '', '', $parameters['param'] ?? '', '', $parameters['sortfield'] ?? '', $parameters['sotorder'] ?? '', 'center ');
+				print_liste_field_titre($langs->transnoentitiesnoconv('EInvoiceFile'), '', '', '', $parameters['param'] ?? '', '', $parameters['sortfield'] ?? '', $parameters['sortorder'] ?? '', 'center ');
 			}
 
 			// syncstatus
 			if (empty($parameters['arrayfields']['pdp_syncstatus']) || !empty($parameters['arrayfields']['pdp_syncstatus']['checked'])) {
-				print_liste_field_titre($langs->transnoentitiesnoconv('PDPSyncStatus'), '', '', '', $parameters['param'] ?? '', '', $parameters['sortfield'] ?? '', $parameters['sotorder'] ?? '', 'center ');
+				print_liste_field_titre($langs->transnoentitiesnoconv('PDPSyncStatus'), '', '', '', $parameters['param'] ?? '', '', $parameters['sortfield'] ?? '', $parameters['sortorder'] ?? '', 'center ');
 			}
 		}
 
@@ -1966,12 +1961,10 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 
 		$contexts = explode(':', $parameters['context']);
 
-		// Every block below counts the cells it prints into the caller's column counter, which sizes the
-		// footer of the list. A hook is not guaranteed to receive that counter already built, so make sure
-		// of it once, before the first increment rather than after it. Only create the key when it is
-		// missing: the caller passes its own counter by reference (list.php builds 'totalarray' =>
-		// &$totalarray), so replacing an existing one would write through that reference and reset the
-		// count it has already accumulated.
+		// The blocks below count their cells into the caller's column counter, which sizes the list footer,
+		// and a hook is not guaranteed to receive it already built. Only create the key when it is missing:
+		// the caller passes it by reference (list.php builds 'totalarray' => &$totalarray), so replacing an
+		// existing one would write through that reference and reset the count already accumulated.
 		if (!array_key_exists('totalarray', $parameters)) {
 			$parameters['totalarray'] = array('nbfield' => 0);
 		} elseif (!array_key_exists('nbfield', $parameters['totalarray'])) {
@@ -2224,5 +2217,98 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 		}
 
 		return 1;
+	}
+
+	/**
+	 * Add a link to the read-only XML viewer on the line of the e-invoice file, in the document list
+	 * of an invoice card (issue #687).
+	 *
+	 * The core offers no preview there: dolIsAllowedForPreview() whitelists mime subtypes that hold
+	 * neither xml nor the Factur-X pdf. This hook runs once per file line, which is where the link goes.
+	 *
+	 * @param array{colspan:int,socid:int|string,id:int|string,modulepart:string,relativepath:string}	$parameters		Array of parameters
+	 * @param array<string,mixed>																		$object			The file of the line being rendered
+	 * @param string																					$action			Code action
+	 * @param Hookmanager																				$hookmanager	Hookmanager
+	 * @return int																										0 in all cases (the line is completed, never replaced)
+	 */
+	public function formBuilddocLineOptions($parameters, $object, &$action, $hookmanager)
+	{
+		global $langs, $user;
+
+		$this->resprints = '';
+
+		$modulepart = (string) ($parameters['modulepart'] ?? '');
+		$invoiceid = (int) ($parameters['id'] ?? 0);
+		$relativepath = (string) ($parameters['relativepath'] ?? '');
+		if ($invoiceid <= 0 || strpos($relativepath, '/') === false) {
+			return 0;
+		}
+
+		// Only the line of the XML. The PDF of the core, and the Factur-X one, are previewed by the core
+		// itself and have nothing to gain here. The line is recognised by the name the module gives the
+		// file it writes, which costs nothing: the viewer resolves the path of the file on its own, and
+		// prints nothing if it does not find it.
+		if ($modulepart == 'facture') {
+			// Sent to a customer: <ref>/<ref>_cii.xml, the name EInvoicing::getEInvoiceXmlFilePath() builds
+			if (!$user->hasRight('facture', 'lire') || substr($relativepath, -8) !== '_cii.xml') {
+				return 0;
+			}
+			$urlparam = '';
+		} elseif ($modulepart == 'facture_fournisseur') {
+			// Received from a supplier: <ref supplier>_einvoice.xml, the name
+			// CIIProtocol::saveEInvoiceFileToSupplierInvoiceAttachment() gives the file it saves
+			if (!$user->hasRight('fournisseur', 'facture', 'lire') || substr($relativepath, -13) !== '_einvoice.xml') {
+				return 0;
+			}
+			$urlparam = '&element=supplier';
+		} else {
+			return 0;
+		}
+
+		$langs->load("einvoicing@einvoicing");
+
+		// The 'documentpreview' class is what the core binds (lib_foot.js.php) to its own preview dialog:
+		// it reads href, mime and data-title and frames the answer, so the XML opens where a PDF opens,
+		// instead of in a page of its own. Without javascript the href is simply followed, and the same
+		// page answers as a full page. The file name keeps the download link the core gives it.
+		$url = dol_buildpath('/einvoicing/xmlpreview.php', 1).'?id='.$invoiceid.$urlparam.'&mode=raw';
+
+		// Same markup as the preview picto of FormFile::showPreview(), so the line reads as a native one
+		$anchorid = 'einvoicingxmlpreview'.$invoiceid;
+		$this->resprints = '<td class="right nowraponall">';
+		$this->resprints .= '<a id="'.$anchorid.'" class="pictopreview documentpreview" href="'.$url.'" mime="text/html"';
+		$this->resprints .= ' data-title="'.dol_escape_htmltag($langs->trans("EInvoiceXmlPreviewTitle")).'"';
+		$this->resprints .= ' target="_blank" rel="noopener noreferrer"';
+		$this->resprints .= ' title="'.dol_escape_htmltag($langs->trans("EInvoicePreviewXml")).'">';
+		$this->resprints .= '<span class="fas fa-search-plus pictofixedwidth" style=" color: #808080;"></span>';
+		$this->resprints .= '</a>';
+
+		// The core closes the cell holding the file name before this hook is executed, so the only place
+		// the hook can write is a cell of its own at the end of the line. The picto belongs next to the
+		// ones the core puts on the previewable files, so it is moved into that first cell, and the cell
+		// this hook had to open is dropped, leaving the line with the columns it had. Without javascript
+		// nothing moves: the picto stays at the end of the line and still opens the file.
+		$this->resprints .= '<script nonce="'.getNonce().'" type="text/javascript">
+			jQuery(function() {
+				var picto = document.getElementById("'.$anchorid.'");
+				if (!picto || !picto.parentNode || !picto.parentNode.parentNode) {
+					return;
+				}
+				var cell = picto.parentNode;
+				var line = cell.parentNode;
+				// Same class the core gives the name of a file that carries a picto, so the picto lands
+				// in the same column as the ones of the lines that already had one
+				var name = line.cells[0].querySelector("span.spanoverflow");
+				if (name) {
+					name.className += " widthcentpercentminusx valignmiddle";
+				}
+				line.cells[0].appendChild(picto);
+				line.removeChild(cell);
+			});
+			</script>';
+		$this->resprints .= '</td>';
+
+		return 0;
 	}
 }

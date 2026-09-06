@@ -7,6 +7,19 @@
 ModuleEInvoicingName = EInvoicing
 ModuleEInvoicingDesc = Support for E-invoice management. This module allows generating (automatically or manually) invoices in E-invoice format and send them to an E-invoice Access Point. It can also retrieve purchase invoices from this E-invoice Access Point. Only a few countries (France) and Access Points (also called PDP/PA) are supported.
 
+# Keys of the core that the supported cores do not all carry: absent from 18 (RefSupplierBill), 18-19
+# (AccessToken, Message), 18-21 (Automatic, Input, Output), 18-22 (InvoiceType) or 18-23 (the rest).
+AccessToken=Access Token
+Message=Message
+RefSupplierBill=Supplier invoice ref
+Automatic=Automatic
+ErrorThirdPartyNotFound=Error ThirdParty Not Found
+Input=Input
+InvoiceType=Invoice type
+Output=Output
+Success=Success
+VATExemptionCode=VAT exemption code
+
 #
 # Admin page
 #
@@ -123,6 +136,8 @@ FxGoToPdfSetup=Setup the PDF format of Dolibarr
 FxCheckWarningPdfaCarrierNotEnabled=The recommended format for a generated e-invoice is CII, not Factur-X. A Factur-X file is a PDF/A-3 file carrying the XML, so the invoice PDF itself must be a PDF/A: as long as the PDF format of this Dolibarr is not PDF/A-3b, the generated Factur-X files are not conformant (their fonts are not embedded) and may be refused. To keep using Factur-X, set "PDF documents format" to PDF/A-3b in Home - Setup - PDF, which applies to the whole Dolibarr.
 EInvoiceCreditNoteOfRefusedInvoice=This credit note corrects the invoice %s, which was refused. A refused invoice is cancelled and owes nothing, so this credit note cannot be accepted: it can only be refused in its turn.
 EInvoiceCannotAcceptCreditNoteOfRefusedInvoice=This credit note cannot be accepted: it corrects the invoice %s, which was refused. A refused invoice is cancelled and owes nothing, so there is nothing to credit. Refuse this credit note instead.
+EInvoiceFlowInternationalNoLifecycle=The Access Point filed this invoice as B2B international (processing rule %s), so it accepts no lifecycle status on it: it can be neither approved nor refused from here, only paid. A French vendor gets filed that way when it has no reception address in the directory, which is for the vendor to fix.
+EInvoiceFlowInternationalStatusRefused=This status cannot be sent: the Access Point filed this invoice as B2B international (processing rule %s) and accepts no lifecycle status on it.
 InvoiceNotSentToPDPDueToThirdpartyIssues=The invoice was not sent to the Access Point due to errors in the third-party data
 EINVOICING_ENABLE_API_VALIDATION=Enable third-party data validation via government APIs (SIREN, VAT)
 EINVOICING_ENABLE_API_VALIDATION_HELP=If enabled, third-party data (Prof id/SIREN/SIRET or VAT number) is verified in real time via a default Business Registry (example: data.gouv.fr) and the VIES service (EU) before generating and sending the e-invoice. If these services are unavailable, the check is skipped (non-blocking warning).
@@ -178,6 +193,7 @@ DateSyncro=Sync date
 Status=Status
 call_id=Call ID
 flow_id=Flow ID
+FlowId=Flow ID
 tracking_idref=Tracking Ref
 flow_type=Flow type
 flow_direction=Direction
@@ -199,6 +215,18 @@ cdar_reason_detail=LC Reason details
 ack_status=Acknowledgement status
 ack_reason_code=Acknowledgement reason code
 ack_info=Acknowledgement details
+
+# Cards, lists and error paths of the two objects of the module (document_card.php, call_card.php)
+Document=Document
+ShowDocument=Show document
+DeleteDocument=Delete document
+ShowCall=Show call
+DeleteCall=Delete call
+Failed=Failed
+Skipped=Skipped
+ClassNotFound=Class not found
+ErrorNumberingModuleNotSetup=Numbering module not set up for %s
+ErrorLoadingInvoice=Failed to load the invoice
 PASettings=Access Point Settings (PA, PDP...)
 EInvoicingInfo=As part of the French electronic invoicing law, any invoicing software must allow the sending and receiving of invoices. This is achieved through communication with an approved private partner called a PA (formerly PDP). This module enables bi-directional synchronization between your Dolibarr and a PA. The module is free, but the PA you choose will most likely charge subscription fees (The contract is drawn up directly with the PA %s).
 EInvoicingInfoProxy= Or via %s
@@ -357,6 +385,11 @@ VATOnDebitsMention=Option for the payment of VAT on debits
 CurrentAP=Current access point: %s
 CreatedManually=Created manually
 DevTools=Dev tools
+
+# Generation page of the developer tools (admin/setup_devtools.php)
+MyCompany=My company
+Seller=Seller
+Buyer=Buyer
 YourSoftwareSeemsConnectedWith=Your software seems linked to the E-invoicing Access Point Platform %s
 YourSoftwareDoesNotSeemsConnectedWith=Your software does NOT appear to be linked to an E-invoicing Access Point Platform yet. Go into the e-invoicing module setup to connect it.
 ClickHereToRemoveConnection=Click here to remove this connection
@@ -434,6 +467,7 @@ EinvoicingCantUnvalidateATransmittedInvoice=You are trying to modify the status 
 EinvoicingCantModifyATransmittedInvoice=You are trying to modify a property that is locked once the invoice has been transmitted to the Access Point
 SendingStatus=Sending status
 CheckingStatus=Checking status
+CheckStatus=Check status
 
 EINVOICING_CLIENT_ID=Client ID
 EINVOICING_CLIENT_SECRET=Client secret
@@ -688,3 +722,10 @@ EInvoicingSupportExportQuestion=Build one archive out of the %s selected record(
 EInvoicingSupportExportPrivacy=The archive holds the selected records as they are stored, the e-invoice XML included, so it carries the names, addresses, e-mail addresses and phone numbers they contain. Credentials, tokens and passwords are removed. Read it before sending it to anyone.
 EInvoicingSupportExportNoZip=No support archive can be built: this PHP installation has no ZipArchive extension.
 EInvoicingSupportExportTooMany=Too many records selected for a support export: %s selected, %s at most. Narrow the selection, or raise the constant EINVOICING_SUPPORT_EXPORT_MAX.
+
+# E-invoice XML preview (xmlpreview.php)
+EInvoiceXmlPreviewTitle=E-invoice XML
+EInvoicePreviewXml=Show the e-invoice XML
+EInvoiceNoFileToPreview=No e-invoice XML has been generated for this invoice.
+EInvoiceNoReceivedFileToPreview=No e-invoice XML has been received for this invoice.
+EInvoiceXmlReindented=received on a single line, shown reindented
