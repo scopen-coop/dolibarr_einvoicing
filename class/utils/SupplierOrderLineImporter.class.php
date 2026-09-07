@@ -185,7 +185,7 @@ class SupplierOrderLineImporter
 	 */
 	public static function importSelectedLines(FactureFournisseur $invoice, User $user, array $orderLineIds)
 	{
-		global $db, $conf, $langs;
+		global $db, $langs;
 
 		if (!self::isEligibleInvoice($invoice)) {
 			$invoice->error = $langs->trans('SupplierOrderLineImportNotEligible');
@@ -318,6 +318,16 @@ class SupplierOrderLineImporter
 	public static function addInvoiceLineFromOrderLine(FactureFournisseur $invoice, $line)
 	{
 		global $conf;
+
+		if (empty($invoice->context) || !is_array($invoice->context)) {
+			$invoice->context = array();
+		}
+		$invoice->context['link_origin'] = 'order_supplier';
+		if (!empty($line->fk_commande)) {
+			$invoice->context['link_origin_id'] = (int) $line->fk_commande;
+		}
+		$invoice->origin = 'order_supplier';
+		$invoice->origin_type = 'order_supplier';
 
 		$desc = ($line->desc ? $line->desc : $line->product_label);
 		$product_type = ($line->product_type ? $line->product_type : 0);
