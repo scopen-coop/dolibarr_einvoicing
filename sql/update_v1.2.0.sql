@@ -13,3 +13,5 @@ ALTER TABLE llx_einvoicing_lifecycle_msg ADD INDEX idx_einvoicing_lifecycle_msg_
 ALTER TABLE llx_einvoicing_lifecycle_msg ADD INDEX idx_einvoicing_lifecycle_msg_flowid (flow_id);
 
 ALTER TABLE llx_einvoicing_routing ADD INDEX idx_einvoicing_routing_soc (fk_soc, routing_type, active);
+
+ALTER TABLE llx_einvoicing_document ADD COLUMN processing_rule varchar(50) AFTER flow_profile;

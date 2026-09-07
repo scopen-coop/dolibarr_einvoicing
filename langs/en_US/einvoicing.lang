@@ -7,6 +7,19 @@
 ModuleEInvoicingName = EInvoicing
 ModuleEInvoicingDesc = Support for E-invoice management. This module allows generating (automatically or manually) invoices in E-invoice format and send them to an E-invoice Access Point. It can also retrieve purchase invoices from this E-invoice Access Point. Only a few countries (France) and Access Points (also called PDP/PA) are supported.
 
+# Keys of the core that the supported cores do not all carry: absent from 18 (RefSupplierBill), 18-19
+# (AccessToken, Message), 18-21 (Automatic, Input, Output), 18-22 (InvoiceType) or 18-23 (the rest).
+AccessToken=Access Token
+Message=Message
+RefSupplierBill=Supplier invoice ref
+Automatic=Automatic
+ErrorThirdPartyNotFound=Error ThirdParty Not Found
+Input=Input
+InvoiceType=Invoice type
+Output=Output
+Success=Success
+VATExemptionCode=VAT exemption code
+
 #
 # Admin page
 #
@@ -123,6 +136,8 @@ FxGoToPdfSetup=Setup the PDF format of Dolibarr
 FxCheckWarningPdfaCarrierNotEnabled=The recommended format for a generated e-invoice is CII, not Factur-X. A Factur-X file is a PDF/A-3 file carrying the XML, so the invoice PDF itself must be a PDF/A: as long as the PDF format of this Dolibarr is not PDF/A-3b, the generated Factur-X files are not conformant (their fonts are not embedded) and may be refused. To keep using Factur-X, set "PDF documents format" to PDF/A-3b in Home - Setup - PDF, which applies to the whole Dolibarr.
 EInvoiceCreditNoteOfRefusedInvoice=This credit note corrects the invoice %s, which was refused. A refused invoice is cancelled and owes nothing, so this credit note cannot be accepted: it can only be refused in its turn.
 EInvoiceCannotAcceptCreditNoteOfRefusedInvoice=This credit note cannot be accepted: it corrects the invoice %s, which was refused. A refused invoice is cancelled and owes nothing, so there is nothing to credit. Refuse this credit note instead.
+EInvoiceFlowInternationalNoLifecycle=The Access Point filed this invoice as B2B international (processing rule %s), so it accepts no lifecycle status on it: it can be neither approved nor refused from here, only paid. A French vendor gets filed that way when it has no reception address in the directory, which is for the vendor to fix.
+EInvoiceFlowInternationalStatusRefused=This status cannot be sent: the Access Point filed this invoice as B2B international (processing rule %s) and accepts no lifecycle status on it.
 InvoiceNotSentToPDPDueToThirdpartyIssues=The invoice was not sent to the Access Point due to errors in the third-party data
 EINVOICING_ENABLE_API_VALIDATION=Enable third-party data validation via government APIs (SIREN, VAT)
 EINVOICING_ENABLE_API_VALIDATION_HELP=If enabled, third-party data (Prof id/SIREN/SIRET or VAT number) is verified in real time via a default Business Registry (example: data.gouv.fr) and the VIES service (EU) before generating and sending the e-invoice. If these services are unavailable, the check is skipped (non-blocking warning).
@@ -200,6 +215,7 @@ DateSyncro=Sync date
 Status=Status
 call_id=Call ID
 flow_id=Flow ID
+FlowId=Flow ID
 tracking_idref=Tracking Ref
 flow_type=Flow type
 flow_direction=Direction
@@ -221,6 +237,18 @@ cdar_reason_detail=LC Reason details
 ack_status=Acknowledgement status
 ack_reason_code=Acknowledgement reason code
 ack_info=Acknowledgement details
+
+# Cards, lists and error paths of the two objects of the module (document_card.php, call_card.php)
+Document=Document
+ShowDocument=Show document
+DeleteDocument=Delete document
+ShowCall=Show call
+DeleteCall=Delete call
+Failed=Failed
+Skipped=Skipped
+ClassNotFound=Class not found
+ErrorNumberingModuleNotSetup=Numbering module not set up for %s
+ErrorLoadingInvoice=Failed to load the invoice
 PASettings=Access Point Settings (PA, PDP...)
 EInvoicingInfo=As part of the French electronic invoicing law, any invoicing software must allow the sending and receiving of invoices. This is achieved through communication with an approved private partner called a PA (formerly PDP). This module enables bi-directional synchronization between your Dolibarr and a PA. The module is free, but the PA you choose will most likely charge subscription fees (The contract is drawn up directly with the PA %s).
 EInvoicingInfoProxy= Or via %s
@@ -336,6 +364,10 @@ einvoicingSourceTitle=Access Point
 einvoicingSourceDesc=E-invoicing Access Point
 SendStatusMessage=Change and submit invoice status
 ConfirmSendStatusMessage=Are you sure you want to update the status of invoice %s and submit it to the Access Point as <b>%s</b>?
+ConfirmSendStatusMessageAndValidate=Are you sure you want to update the status of invoice %s and submit it to the Access Point as <b>%s</b>?<br>Accepting the invoice also validates it in Dolibarr: it will leave the draft state and get its final reference.
+EInvoiceApprovalValidatedTheInvoice=Invoice %s has been validated: accepting a received invoice records it in the accounts.
+EInvoiceApprovalCouldNotValidate=The invoice could not be validated, so no status was sent to the Access Point.
+EInvoiceApprovalNeedsValidateRight=Accepting this invoice would validate it in Dolibarr, which your permissions do not allow.
 SelectStatusReason=Reason
 TryToIncreaseStartDateOrMax=No new flow processed. Try to increase the "%s"
 ErrorGeneratingXML=Error when generating the e-invoice XML file
@@ -375,6 +407,11 @@ VATOnDebitsMention=Option for the payment of VAT on debits
 CurrentAP=Current access point: %s
 CreatedManually=Created manually
 DevTools=Dev tools
+
+# Generation page of the developer tools (admin/setup_devtools.php)
+MyCompany=My company
+Seller=Seller
+Buyer=Buyer
 YourSoftwareSeemsConnectedWith=Your software seems linked to the E-invoicing Access Point Platform %s
 YourSoftwareDoesNotSeemsConnectedWith=Your software does NOT appear to be linked to an E-invoicing Access Point Platform yet. Go into the e-invoicing module setup to connect it.
 ClickHereToRemoveConnection=Click here to remove this connection
@@ -420,6 +457,7 @@ SupplierInvoiceComparisonVatBasisDifference=Difference in VAT basis amount %s%% 
 SupplierInvoiceComparisonVatRateDifference=Difference in VAT amount %s%% (e-invoice: %s / Dolibarr invoice: %s)
 SupplierInvoiceComparisonVatRateNotFound=VAT rate of %s%% not found in the Dolibarr invoice
 SupplierInvoiceComparisonSuggestVatCalculationMode=Recalculate the invoice using Mode %s to get VAT amounts corresponding to the e-invoice
+EInvoiceImportVatModeRealigned=The invoice was recalculated using VAT calculation Mode %s to carry the totals of the received document, which announces a total VAT (BT-110) of %s and a total including VAT (BT-112) of %s, where the VAT calculation mode of this instance rebuilt a total of %s including VAT.
 EinvoicingCantDeleteADocumentLinkedToAnExistingSupplierInvoice=The flow %s can't be deleted because it is linked to the Dolibarr supplier invoice n° %s
 EinvoicingCantDeleteAValidatedSupplierInvoice=A supplier invoice created from a received e-invoice can no longer be deleted once it has been validated. Only its draft can, and deleting the draft leaves the received document itself in the flow list.
 EinvoicingFailedToDetachTheFlowOfADeletedSupplierInvoice=Failed to detach the received e-invoice from the supplier invoice %s, so the invoice was not deleted.
@@ -440,6 +478,7 @@ EInvoiceReimportNoProvider=No access point is configured.
 EInvoiceReimportInvoiceIsNotADraft=The supplier invoice %s is no longer a draft, so it cannot be replaced by a new import.
 EInvoiceReimportOnlyOnADraft=A received e-invoice can only be imported again while the supplier invoice it created is still a draft.
 EInvoiceReimportFailedToDeleteTheDraft=Failed to delete the draft supplier invoice %s.
+EInvoiceReimportHint=A synchronization never imports again a flow that is already in this list. To import a received supplier invoice again - after deleting the draft it created, for example - open its flow, then use the "%s" action on the flow card.
 EInvoiceBuyerOrderReferenceHelp=Order reference (BT-13) carried by the e-invoice received. It is kept as sent by the supplier, whether or not it matched a purchase order of Dolibarr.
 EInvoiceRoutingCodeRejected=The Chorus Pro service code "%s" was not sent as a buyer routing identifier (BT-46, scheme 0224): rules BR-FR-24 and BR-FR-26 only allow letters, digits and the characters + - _ . up to 100 characters. Please correct it, otherwise a public buyer that requires a service code will reject the invoice.
 EInvoiceRoutingCodeNeedsExtendedProfile=The Chorus Pro service code "%s" was not sent as a buyer routing identifier (BT-46, scheme 0224): the %s profile allows a single identifier for the buyer. Select the EXTENDED-CTC-FR profile to send it, as rules BR-FR-CPRO-11 and BR-FR-CPRO-13 require for a public buyer.
@@ -450,6 +489,7 @@ EinvoicingCantUnvalidateATransmittedInvoice=You are trying to modify the status 
 EinvoicingCantModifyATransmittedInvoice=You are trying to modify a property that is locked once the invoice has been transmitted to the Access Point
 SendingStatus=Sending status
 CheckingStatus=Checking status
+CheckStatus=Check status
 
 EINVOICING_CLIENT_ID=Client ID
 EINVOICING_CLIENT_SECRET=Client secret
@@ -692,3 +732,22 @@ DisabledBecauseNotEditable=This invoice is not editable
 ErrorSupplierNotVisibleInEntity=The supplier "%s" is not visible in entity %s. You must share or create it in the target entity first.
 WarningEntityChangedFileMoveFailed=The entity was changed but the invoice files could not be moved to the new entity's directory. You may need to move them manually.
 EInvoicingInfoManagedByMasterSetup=The einvoicing setup is managed by the master entity (ID %s)
+
+# OAuth proxy: allowed redirect domains (EINVOICING_SUPERPDPVIAPARTNER_ONLY_DOMAIN)
+ProxyRedirectDomainsNotSet=Security: this instance is an OAuth proxy and accepts any redirect destination
+ProxyRedirectDomainsNotSetDetail=The proxy page (einvoicing/public/proxy_oauthcallback.php) answers without authentication and sends the OAuth access token and refresh token to the address the caller asks for. As long as the constant EINVOICING_SUPERPDPVIAPARTNER_ONLY_DOMAIN is empty, every address is accepted, so anyone can have the tokens of an Access Point account delivered to a server of their own. Set that constant to the comma separated list of the domains of your customer instances, for example mycustomerdomain.com,anotherdomain.com. A future version will refuse every redirect while the list is empty.
+ProxyRedirectDomainsGoToOtherSetup=Set the constant in Home - Setup - Other
+
+# Support export (mass action of the flow list and of the API call log)
+EInvoicingSupportExport=Export in a zip archive
+EInvoicingSupportExportQuestion=Build one archive out of the %s selected record(s)?
+EInvoicingSupportExportPrivacy=The archive holds the selected records as they are stored, the e-invoice XML included, so it carries the names, addresses, e-mail addresses and phone numbers they contain. Credentials, tokens and passwords are removed. Read it before sending it to anyone.
+EInvoicingSupportExportNoZip=No support archive can be built: this PHP installation has no ZipArchive extension.
+EInvoicingSupportExportTooMany=Too many records selected for a support export: %s selected, %s at most. Narrow the selection, or raise the constant EINVOICING_SUPPORT_EXPORT_MAX.
+
+# E-invoice XML preview (xmlpreview.php)
+EInvoiceXmlPreviewTitle=E-invoice XML
+EInvoicePreviewXml=Show the e-invoice XML
+EInvoiceNoFileToPreview=No e-invoice XML has been generated for this invoice.
+EInvoiceNoReceivedFileToPreview=No e-invoice XML has been received for this invoice.
+EInvoiceXmlReindented=received on a single line, shown reindented

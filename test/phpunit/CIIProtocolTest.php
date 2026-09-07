@@ -21,25 +21,18 @@
  *      \ingroup    test
  *      \brief      PHPUnit test for the line billing period (EN 16931 BG-26 / BT-134 / BT-135), in
  *                  both directions.
- *                  Export (issue #435): CIIProtocol::buildLineItem() must map the line
- *                  date_start/date_end (already parsed upstream into linePeriodStart/linePeriodEnd)
- *                  to the BillingSpecifiedPeriod block, placed between ApplicableTradeTax and
- *                  SpecifiedTradeAllowanceCharge/SpecifiedTradeSettlementLineMonetarySummation as
- *                  required by the CII D22B schema sequence.
- *                  Import (issue #576): CIIProtocol::resolveLinePeriod() must turn what the parser
- *                  read back into the timestamps a supplier invoice line stores, keeping one side
- *                  alone and refusing a period that ends before it starts.
+ *                  Export (issue #435): buildLineItem() must place BillingSpecifiedPeriod where the
+ *                  CII D22B schema sequence requires it. Import (issue #576): resolveLinePeriod()
+ *                  must keep one side alone and refuse a period that ends before it starts.
  *      \remarks    To run this script as CLI: phpunit filename.php
  */
 
 global $conf, $user, $langs, $db;
 
-// This module is deployed by symlinking this repository into htdocs/custom/einvoicing of one or
-// several Dolibarr instances. Some test runners resolve the real (non-symlinked) path of this
-// file before including it, which breaks a fixed "../../htdocs/master.inc.php" relative path.
-// DOLIBARR_HTDOCS let's the developer/CI point explicitly at the Dolibarr instance to test
-// against; otherwise we fall back to the standard relative path (valid when this file is reached
-// through the htdocs/custom/einvoicing/test/phpunit symlink without realpath resolution).
+// This module is deployed by symlinking this repository into htdocs/custom/einvoicing of one or several
+// Dolibarr instances. Some test runners resolve the real (non-symlinked) path of this file before including
+// it, which breaks a fixed "../../htdocs/master.inc.php" relative path. DOLIBARR_HTDOCS let's the developer/CI
+// point explicitly at the Dolibarr instance to test against; otherwise we fall back to the relative path.
 $dolibarrHtdocs = getenv('DOLIBARR_HTDOCS');
 if (!$dolibarrHtdocs) {
 	$dolibarrHtdocs = dirname(__FILE__) . '/../../htdocs';
@@ -241,9 +234,8 @@ class CIIProtocolTest extends CommonClassTest
 
 	/**
 	 * When a line has both a period and a discount, BillingSpecifiedPeriod must still be
-	 * inserted before SpecifiedTradeAllowanceCharge (the discount block) - this is the exact
-	 * case that a naive "insert before MonetarySummation" implementation would get wrong,
-	 * since the CII D22B schema requires ApplicableTradeTax, then BillingSpecifiedPeriod, then
+	 * inserted before SpecifiedTradeAllowanceCharge (the discount block), since the CII D22B
+	 * schema requires ApplicableTradeTax, then BillingSpecifiedPeriod, then
 	 * SpecifiedTradeAllowanceCharge, then SpecifiedTradeSettlementLineMonetarySummation, in
 	 * that exact order.
 	 *

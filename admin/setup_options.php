@@ -267,11 +267,6 @@ if (!getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP')) {
 	$item->defaultFieldValue = '0';
 	$item->cssClass = 'minwidth500';
 
-	// The VAT exigibility scheme decides when the VAT of an invoice falls due, hence the VAT point date
-	// code (BT-8) the document declares, the "VAT on debits" legal mention it carries, and whether a
-	// cash-in has to be reported with the status 212. Dolibarr already holds that scheme in the setup of
-	// the Tax/VAT module (TAX_MODE_SELL_PRODUCT / TAX_MODE_SELL_SERVICE), so it is not duplicated here:
-	// remind its current value, with a link to the page that owns it.
 	// The VAT regime the generated documents declare in BT-8. Left to the VAT mode above by default;
 	// an explicit value is for a seller whose regime that mode cannot express (issue #419).
 	$item = $formSetup->newItem('EINVOICING_VAT_POINT_DATE_CODE')->setAsSelect(array(
@@ -329,26 +324,6 @@ if (!getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP')) {
 	$item = $formSetup->newItem('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS');
 	$item->helpText = $langs->transnoentities('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS_HELP');
 	$item->defaultFieldValue = getDolGlobalString('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS', 'takepos');
-	$item->cssClass = 'minwidth500';
-
-
-	// TODO Move this in the dev setup page ?
-
-	// Allow re-sending / re-editing an invoice already transmitted to the Access Point. Off by default:
-	// a transmitted invoice is immutable (correct it with a credit note / corrective invoice), and re-sending
-	// makes the PA refuse a duplicate. Turn on only to deliberately test PA retry behaviour.
-	$item = $formSetup->newItem('EINVOICING_ALLOW_RESEND_TRANSMITTED')->setAsYesNo();
-	$item->nameText = $langs->trans("EINVOICING_ALLOW_RESEND_TRANSMITTED").' <span class="opacitymedium">('.$langs->trans("EINVOICING_TRANSMITTED_NOT_FOR_PROD").')</span>';
-	$item->defaultFieldValue = '0';
-	$item->helpText = $langs->transnoentities('EINVOICING_ALLOW_RESEND_TRANSMITTED_HELP');
-	$item->cssClass = 'minwidth500';
-
-	// Dev-only: keep the "Regenerate e-invoice" button/action available on a transmitted-locked invoice
-	// (rebuild the CII/Factur-X to inspect the XML). Re-sending stays locked. Off by default.
-	$item = $formSetup->newItem('EINVOICING_ALLOW_REGEN_TRANSMITTED')->setAsYesNo();
-	$item->nameText = $langs->trans("EINVOICING_ALLOW_REGEN_TRANSMITTED").' <span class="opacitymedium">('.$langs->trans("EINVOICING_TRANSMITTED_NOT_FOR_PROD").')</span>';
-	$item->defaultFieldValue = '0';
-	$item->helpText = $langs->transnoentities('EINVOICING_ALLOW_REGEN_TRANSMITTED_HELP');
 	$item->cssClass = 'minwidth500';
 
 	/*

@@ -197,7 +197,7 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 				$item->fieldOverride = htmlspecialchars('**************' . substr($tokenData['token'], -4));
 
 				if (!empty($tokenData['token_expires_at'])) {
-					$item->fieldOverride .= ' &nbsp; <span class="opacitymedium hideonsmartphone">(' . $langs->trans("until") . ' ' . dol_print_date($tokenData['token_expires_at'], 'dayhoursec', 'tzuserrel') . ')</span>';
+					$item->fieldOverride .= ' &nbsp; <span class="opacitymedium hideonsmartphone">(' . $langs->trans("Until") . ' ' . dol_print_date($tokenData['token_expires_at'], 'dayhoursec', 'tzuserrel') . ')</span>';
 				}
 				//var_dump($tokenData);
 			}
@@ -304,13 +304,9 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 
 		// OAuth2 client_credentials — RFC 6749, application/x-www-form-urlencoded
 		// Replace old POST /v1/token (JSON username/password) disabled since v1.2.6 (2026-07).
-		// grant_type is REQUIRED by RFC 6749 section 4.4.2, whatever the client authentication
-		// method is: without it the endpoint answers 400 {"error":"Bad Request","message":"must
-		// not be blank"} and no token can ever be issued.
-		// Default is the credentials in the body, the only form checked against the platform.
-		// ESALINK_AUTHENT_USING_BASIC_AUTH switches to HTTP Basic (RFC 6749 section 2.3.1) for
-		// an access point that would require it: credentials then go in the header only, as a
-		// client must not use more than one authentication method in the same request.
+		// grant_type is REQUIRED by RFC 6749 section 4.4.2 whatever the client authentication method is:
+		// without it the endpoint answers 400 and no token is ever issued. Credentials go in the body, or in
+		// an HTTP Basic header (RFC 6749 section 2.3.1) with ESALINK_AUTHENT_USING_BASIC_AUTH, never in both.
 		if (getDolGlobalString('ESALINK_AUTHENT_USING_BASIC_AUTH')) {
 			$param = http_build_query(array(
 				'grant_type'    => 'client_credentials',
@@ -421,7 +417,7 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 			return array('res' => -1, 'message' => $langs->trans('NoAvailableValidatorforThisAccessPoint'));
 		}
 
-		return array('res' => 0, 'message' => $langs->trans('skipped'));
+		return array('res' => 0, 'message' => $langs->trans('Skipped'));
 	}
 
 	/**
@@ -509,14 +505,10 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 			$callRef = $response['call_id'];
 
 			/**
-			 * We make an additional call to retrieve the acknowledgment information and update the status.
-			 * However, document validation on the PDP side may take some time.
-			 * Therefore, we initially set the status to "Sent".
-			 *
-			 * We then try to fetch the PDP validation result:
+			 * Document validation on the PDP side may take some time, so we initially set the status to
+			 * "Sent", then make an additional call to retrieve the acknowledgment information:
 			 * - If the validation is successful, we update the status to "Sent (awaiting acknowledgment)".
 			 * - If the PDP validation fails, we set the status to "Error".
-			 *
 			 * If no response is available yet, we wait for the next synchronization.
 			 **/
 
@@ -1041,7 +1033,7 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 						);
 
 						dol_syslog(__METHOD__ . " Flow " . $flow['flowId'] . " postponed: " . $res['message'], LOG_WARNING, 0, "_einvoicing");
-						$results_messages[] = "Flow " . $flow['flowId'] . " postponed, it will be retried on the next synchronization: " . $res['message'];
+						$results_messages[] = "Flow " . dol_escape_htmltag((string) $flow['flowId']) . " postponed, it will be retried on the next synchronization: " . $res['message'];
 
 						$postponedFlows++;
 						continue;
@@ -1110,14 +1102,14 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 						}
 					}
 					dol_syslog(__METHOD__ . " Failed to synchronize flow " . $flow['flowId'] . ": " . $res['message'], LOG_DEBUG, 0, "_einvoicing");
-					$results_messages[] = "ERROR_SYNCFLOW - Failed to synchronize flow " . $flow['flowId'] . ": " . $res['message'];
+					$results_messages[] = "ERROR_SYNCFLOW - Failed to synchronize flow " . dol_escape_htmltag((string) $flow['flowId']) . ": " . $res['message'];
 
 					$error++;
 				}
 
 				// If res == 0, commit but count it as already existed
 				if ($res['res'] == 0) {
-					$results_messages[] = "<span class=\"opacitylow\">Flow " . $flow['flowId'] . " skipped: " . $res['message'] . "</span>";
+					$results_messages[] = "<span class=\"opacitylow\">Flow " . dol_escape_htmltag((string) $flow['flowId']) . " skipped: " . $res['message'] . "</span>";
 					$alreadyExist++;
 					//$lastsuccessfullSyncronizedFlow = $flow['flowId'];
 				}
@@ -1128,7 +1120,7 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 					//$lastsuccessfullSyncronizedFlow = $flow['flowId'];
 				}
 			} catch (Exception $e) {
-				$results_messages[] = "Exception occurred while synchronizing flow " . $flow['flowId'] . ": " . $e->getMessage();
+				$results_messages[] = "Exception occurred while synchronizing flow " . dol_escape_htmltag((string) $flow['flowId']) . ": " . dol_escape_htmltag($e->getMessage());
 				$error++;
 			}
 
@@ -1274,6 +1266,7 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 		$document->flow_direction       = $flowData['flowDirection'] ?? null;
 		$document->flow_syntax          = $flowData['flowSyntax'] ?? null;
 		$document->flow_profile         = $flowData['flowProfile'] ?? null;
+		$document->processing_rule      = $flowData['processingRule'] ?? null;
 		$document->ack_status           = $flowData['acknowledgement']['status'] ?? null;
 		// Change this fields to fit with the new api response ===============================================
 		$document->ack_reason_code      = $flowData['acknowledgement']['details'][0]['reasonCode'] ?? null;
@@ -1349,12 +1342,9 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 					break;
 				}
 
-				// Retrieve the invoice of the flow in whichever shape this module is able to read: the
-				// 'Converted' document first, then the 'Original', then the readable view. Asking only for
-				// the 'Converted' one makes the import depend on a setting that lives on the access point
-				// account: pointed at a syntax with no reader here - UBL - every received invoice of the
-				// instance becomes unreadable, even when the issuer sent a CII or a Factur-X the module
-				// reads perfectly.
+				// Retrieve the invoice of the flow in whichever shape this module can read: 'Converted' first,
+				// then 'Original', then the readable view. Asking only for 'Converted' makes the import depend
+				// on a setting of the access point account: pointed at UBL, every received invoice is lost.
 				$tmpProtocolManager = new ProtocolManager($this->db);
 				$importable = $this->fetchImportableFlowDocument($flowId, $tmpProtocolManager);
 
@@ -1477,11 +1467,9 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 				*/
 
 				// 2. Read CDAR and update status of linked customer invoice
-				// The CDAR is normally read as the "Original" document. Some flows have no original on the
-				// platform, only the converted copy, and the synchronization then stops on that flow and on
-				// every flow behind it with no way to go past it. Both documents carry the same CDAR, so fall
-				// back on the converted one rather than blocking. docType can be 'Metadata', 'Original',
-				// 'Converted' or 'ReadableView'.
+				// Some flows have no 'Original' on the platform, only the converted copy, and the sync then
+				// stops on that flow and on every flow behind it. Both carry the same CDAR, so fall back on
+				// the converted one. docType can be 'Metadata', 'Original', 'Converted' or 'ReadableView'.
 				$flowResponse = $this->fetchFlowData($flowId, 'Original');
 
 				if ($flowResponse['status_code'] != 200) {
@@ -1872,14 +1860,10 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 
 			if ($response['status_code'] == 200 || $response['status_code'] == 202) {
 				/**
-				 * We make an additional call to retrieve the acknowledgment information and update the status.
-				 * However, document validation on the PDP side may take some time.
-				 * Therefore, we initially set the status to "Sent".
-				 *
-				 * We then try to fetch the PDP validation result:
+				 * Document validation on the PDP side may take some time, so we initially set the status to
+				 * "Sent", then make an additional call to retrieve the acknowledgment information:
 				 * - If the validation is successful, we update the status of the electronic invoice accordingly.
 				 * - If the PDP validation fails, we set the status to "Error" and log the reason.
-				 *
 				 * If no response is available yet, we wait for the next synchronization.
 				 **/
 
@@ -1952,7 +1936,9 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 				$platformMessage = (string) (!empty($response['response']['message'])
 					? $response['response']['message']
 					: ($response['errorMessage'] ?? 'No message'));
-				$message = 'Failed to send CDAR file to PDP. Status code: ' . $response['status_code'] . '. Message: ' . $platformMessage;
+				// Name the platform that refused: this wording is identical in every provider, so a bug
+				// report quoting it alone never says which platform answered (issue #799).
+				$message = 'Failed to send CDAR file to ' . $this->name . '. Status code: ' . $response['status_code'] . '. Message: ' . $platformMessage;
 				// MDT-73 is the electronic address the status is sent to. The platform refuses the CDAR when
 				// it does not know the vendor under the address the module used, and says nothing about what
 				// to do next - while the received invoice stays impossible to approve or refuse, and so

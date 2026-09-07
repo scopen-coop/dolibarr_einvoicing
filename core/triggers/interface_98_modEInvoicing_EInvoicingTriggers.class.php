@@ -95,18 +95,41 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 				}
 			}
 
-			// Default product for import
-			$routingProductId = GETPOST('routing_product_id', 'aZ09');
-			if ($routingProductId !== '' && $routingProductId !== '-1') {
-				$existing = $einvoicing->fetchDefaultRouting($socId, 'product');
-				if (empty($existing)) {
-					$result = $einvoicing->addRouting($socId, $routingProductId, '', 'product');
-				} else {
-					$result = $einvoicing->setDefaultRouting($socId, $routingProductId, '', '', '', 'product');
+			// Default product for import.
+			// The combo posts '-1' for the empty entry and '' for a cleared ajax input: both mean "no
+			// default any more" and delete the routing. A save that does not carry the field at all (API,
+			// mass action, import) or whose field could not show the current value (routing_product_id_shown)
+			// must leave it untouched.
+			if (GETPOSTISSET('routing_product_id')) {
+				$routingProductId = GETPOST('routing_product_id', 'aZ09');
+				if ($routingProductId === '-1' || $routingProductId === '0') {
+					$routingProductId = '';
 				}
-				if ($result < 0) {
-					$error++;
-					$this->errors[] = $langs->trans('FailedToSaveRoutingID').' '.$einvoicing->error;
+				$shownProductId = GETPOST('routing_product_id_shown', 'aZ09');
+				if ($shownProductId === '-1' || $shownProductId === '0') {
+					$shownProductId = '';
+				}
+				$existing = $einvoicing->fetchDefaultRouting($socId, 'product');
+				$result = 0;
+				if ($routingProductId === '') {
+					if ($shownProductId !== '' && !empty($existing)) {
+						// setDefaultRouting() with an empty value only deletes the existing routing
+						$result = $einvoicing->setDefaultRouting($socId, '', '', '', '', 'product');
+						if ($result < 0) {
+							$error++;
+							$this->errors[] = $langs->trans('FailedToDeleteRoutingID').' '.$einvoicing->error;
+						}
+					}
+				} else {
+					if (empty($existing)) {
+						$result = $einvoicing->addRouting($socId, $routingProductId, '', 'product');
+					} else {
+						$result = $einvoicing->setDefaultRouting($socId, $routingProductId, '', '', '', 'product');
+					}
+					if ($result < 0) {
+						$error++;
+						$this->errors[] = $langs->trans('FailedToSaveRoutingID').' '.$einvoicing->error;
+					}
 				}
 			}
 
@@ -394,22 +417,17 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 					return -1;
 				}
 
-				// A draft is a local booking, not the electronic invoice: it holds no accounting entry and
-				// says nothing to the platform, so removing it repudiates nothing. It is also the only way
-				// out of an import that landed on the wrong third party, since the vendor of an existing
-				// supplier invoice cannot be changed. Read the status from the database: the object handed
-				// to a trigger is not always freshly fetched.
-				// The incoming flow itself is kept, detached from the invoice that is about to disappear,
-				// so the document stays in the flow list and can be imported again.
+				// A draft holds no accounting entry and says nothing to the platform, so removing it
+				// repudiates nothing, and it is the only way out of an import booked on the wrong vendor.
+				// Re-read through the core class: the object handed to a trigger is not always fresh, and
+				// ->status is the property to read (->statut is a @deprecated alias since 19). An invoice
+				// that cannot be re-read keeps status -1, which is no draft, so the deletion is refused.
 				$status = -1;
-				$sqlstatus = "SELECT fk_statut FROM ".MAIN_DB_PREFIX."facture_fourn WHERE rowid = ".((int) $object->id);
-				$resqlstatus = $this->db->query($sqlstatus);
-				if ($resqlstatus) {
-					$objstatus = $this->db->fetch_object($resqlstatus);
-					if ($objstatus) {
-						$status = (int) $objstatus->fk_statut;
-					}
-					$this->db->free($resqlstatus);
+				$invoicetodelete = new FactureFournisseur($this->db);
+				if ($invoicetodelete->fetch((int) $object->id) > 0) {
+					$status = (int) $invoicetodelete->status;
+				} else {
+					dol_syslog(__METHOD__ . ' Cannot re-read the supplier invoice id=' . ((int) $object->id) . ' being deleted: its deletion is refused', LOG_ERR);
 				}
 
 				if ($status !== FactureFournisseur::STATUS_DRAFT) {
@@ -433,7 +451,14 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 			 */
 			'@phan-var-force Document $object';
 			$duplicate = false;
-			if ($object->fk_element_type == 'invoice_supplier' && SupplierInvoiceHelper::isEInvoice($object->fk_element_id, true, $duplicate)) {
+
+			// A flow does not always carry a supplier invoice id: a lifecycle message never resolves one,
+			// a failed import never booked one, and the column is nullable. Passing null on raises a
+			// TypeError on the int parameter of isEInvoice() and ends a mass deletion on a PHP fatal.
+			// Such a flow is linked to nothing, so the deletion is allowed, as for the detached (0) case.
+			$linkedsupplierinvoiceid = (int) $object->fk_element_id;
+
+			if ($object->fk_element_type == 'invoice_supplier' && $linkedsupplierinvoiceid > 0 && SupplierInvoiceHelper::isEInvoice($linkedsupplierinvoiceid, true, $duplicate)) {
 				$lastid = 0;
 
 				// Test if einvoice is the last one(in this case, we may accept to delete the document, record will be loaded at next sync
@@ -468,10 +493,8 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 	 * Report a cash-in (status 212 "Encaissee") of a customer invoice to the Approved Platform.
 	 *
 	 * Errors are never escalated to $this->errors / a negative return: that would roll back the payment
-	 * Dolibarr just recorded (Paiement::create() aborts on a trigger failure) and a platform notification
-	 * failure must never undo a real payment. dol_syslog is the only channel that reliably surfaces the
-	 * problem outside an interactive session (cron, API, bank import, ...), since setEventMessage() only
-	 * shows up on the next HTML page render.
+	 * Dolibarr just recorded (Paiement::create() aborts on a trigger failure). dol_syslog is the only
+	 * channel that surfaces the problem outside an interactive session (cron, API, bank import, ...).
 	 *
 	 * @param  Facture   $invoice Invoice that has been cashed in
 	 * @param  float     $amount  Amount cashed in (TTC) by this payment, reported as the MEN blocks of the CDAR
@@ -497,14 +520,10 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 			return;
 		}
 
-		// A deposit the platform refused is not a deposit. 'transmitted' is true of every status but the
-		// local ones, and STATUS_ERROR is among those it lets through: it is exactly what an
-		// acknowledgement "Error" leaves behind, see getDolibarrStatusCodeFromPdpLabel(). The platform
-		// holds no invoice to attach a cash-in to, so the status would be refused; and reporting it as
-		// sent would be worse than not sending it, since the reform expects that cash-in once the
-		// invoice is deposited. The invoice has to be corrected and re-sent first, which is what the
-		// "Send" button of the card offers on that very status, and the cash-in reported by hand
-		// afterwards.
+		// A deposit the platform refused is not a deposit. 'transmitted' lets STATUS_ERROR through, which
+		// is what an acknowledgement "Error" leaves behind (see getDolibarrStatusCodeFromPdpLabel()).
+		// The platform holds no invoice to attach a cash-in to: it must be corrected, re-sent, and the
+		// cash-in reported by hand afterwards.
 		if ((int) $currentStatusDetails['code'] === EInvoicing::STATUS_ERROR) {
 			dol_syslog(__METHOD__ . ' Cash-in not reported for invoice id=' . $invoice->id . ': the platform refused its deposit (status ' . EInvoicing::STATUS_ERROR . '), there is nothing to report the payment on', LOG_WARNING, 0, '_einvoicing');
 			setEventMessage($langs->trans("ModuleEInvoicingName") . ' : ' . $langs->trans('EInvoiceCashInNotReportedDepositRefused', $invoice->ref), 'warnings');
@@ -517,7 +536,7 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 		$result = $provider->sendStatusMessage($invoice, 212, '', array('amount' => $amount));
 
 		if ($result['res'] > 0) {
-			setEventMessage($langs->trans("ModuleEInvoicingName").' : '.$langs->trans('EInvStatus212Paid'), 'mesgs');
+			setEventMessage($langs->trans("ModuleEInvoicingName").' : '.$langs->trans('EInvStatus212PaymentReceived'), 'mesgs');
 		} else {
 			dol_syslog(__METHOD__ . ' Failed to send paid status (212) to platform for invoice id=' . $invoice->id . ' : ' . $result['message'], LOG_ERR);
 			setEventMessage($langs->trans("ModuleEInvoicingName").' : '.$result['message'], 'errors');
@@ -567,13 +586,9 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 	/**
 	 * Detach the e-invoicing records of a supplier invoice that is about to be deleted.
 	 *
-	 * The incoming flow is not the Dolibarr invoice: it belongs to the platform and keeps its
-	 * lifecycle, so it is kept and only unlinked (fk_element_id emptied). The extlinks row, on the
-	 * other hand, describes the local element itself and is removed with it - leaving it behind
-	 * would make the flow list show a link to an invoice that no longer exists.
-	 *
-	 * Runs inside the transaction opened by FactureFournisseur::delete(), which rolls back when
-	 * this trigger fails.
+	 * The incoming flow belongs to the platform and keeps its lifecycle, so it is only unlinked
+	 * (fk_element_id emptied). The extlinks row describes the local element and is removed with it.
+	 * Runs inside the transaction opened by FactureFournisseur::delete(), which rolls back on failure.
 	 *
 	 * @param	int		$supplierInvoiceId	Id of the supplier invoice being deleted
 	 * @return	int							Return integer <0 if KO, >0 if OK
