@@ -363,6 +363,14 @@ if (!einvoicingIsReceiveDisabled()) {
 		$item->fieldParams['warningifon'] = 1;
 	}
 
+	// Setup conf to match a vendor product reference written with separators other than the recorded one.
+	// Off by default: the comparison ignores separators, so it is an approximation.
+	$item = $formSetup->newItem('EINVOICING_PRODUCTS_MATCH_CANONICAL_REF')->setAsYesNo();
+	$item->helpText = $langs->transnoentities('EINVOICING_PRODUCTS_MATCH_CANONICAL_REF_HELP');
+	$item->defaultFieldValue = '0';
+	$item->cssClass = 'minwidth500';
+	$item->fieldParams['warningifon'] = 1;
+
 	// Setup conf to choose use of auto generation or not of third parties
 	$item = $formSetup->newItem('EINVOICING_THIRDPARTIES_AUTO_GENERATION')->setAsYesNo();
 	$item->helpText = $langs->transnoentities('EINVOICING_THIRDPARTIES_AUTO_GENERATION_HELP');
@@ -384,12 +392,14 @@ if (!einvoicingIsReceiveDisabled()) {
 	$item->fieldParams['forcereload'] = 1;
 	*/
 
-	if (getDolGlobalString('EINVOICING_SUPPLIER_INVOICE_CHECK_CONSISTENCY_ON_VALIDATION_AVAILABLE')) {
-		// Setup conf to enable or not the consistency check on supplier invoice validation
-		$item = $formSetup->newItem('EINVOICING_SUPPLIER_INVOICE_CHECK_CONSISTENCY_ON_VALIDATION');
-		$item->helpText = $langs->transnoentities('EINVOICING_SUPPLIER_INVOICE_CHECK_CONSISTENCY_ON_VALIDATION_HELP');
-		$item->setAsYesNo();
-	}
+	// Setup conf to enable or not the consistency check on supplier invoice validation. Off by default:
+	// it re-checks every e-invoice at validation, including the ones edited by hand afterwards, which is
+	// a wider question than the one the import itself settles.
+	$item = $formSetup->newItem('EINVOICING_SUPPLIER_INVOICE_CHECK_CONSISTENCY_ON_VALIDATION');
+	$item->helpText = $langs->transnoentities('EINVOICING_SUPPLIER_INVOICE_CHECK_CONSISTENCY_ON_VALIDATION_HELP');
+	$item->setAsYesNo();
+	$item->defaultFieldValue = '0';
+	$item->cssClass = 'minwidth500';
 
 	// Tell the vendor that its invoice is approved (status 205) when the supplier invoice is validated so approved.
 	// Off by default.
