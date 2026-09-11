@@ -175,7 +175,8 @@ class SupplierOrderLineImporter
 	 *
 	 * The selected lines must belong to orders of the same vendor, in an eligible status. Extrafields
 	 * of the order line (Wrike project, analytical code, ...) are copied onto the invoice line when
-	 * the same extrafields exist on facture_fourn_det. Each distinct order is linked to the invoice.
+	 * the same extrafields exist on facture_fourn_det. The Irisolaris BAP validator from the source
+	 * supplier order is copied onto the supplier invoice. Each distinct order is linked to the invoice.
 	 *
 	 * @param	FactureFournisseur	$invoice		Draft received e-invoice
 	 * @param	User				$user			User performing the import
@@ -258,6 +259,7 @@ class SupplierOrderLineImporter
 		}
 
 		$imported = 0;
+		$bapValidatorCopied = false;
 		foreach ($byOrder as $orderId => $lineIdsOfOrder) {
 			$srcobject = new CommandeFournisseur($db);
 			if ($srcobject->fetch($orderId) <= 0) {
@@ -268,6 +270,18 @@ class SupplierOrderLineImporter
 			}
 			if (empty($srcobject->lines) && method_exists($srcobject, 'fetch_lines')) {
 				$srcobject->fetch_lines();
+			}
+
+			if (!$bapValidatorCopied && !empty($srcobject->array_options['options_fk_user_bap_valid'])) {
+				$invoice->array_options['options_fk_user_bap_valid'] = (int) $srcobject->array_options['options_fk_user_bap_valid'];
+				$result = $invoice->insertExtraFields('');
+				if ($result < 0) {
+					$invoice->error = $invoice->error ?: $db->lasterror();
+					$invoice->errors[] = $invoice->error;
+					$db->rollback();
+					return -1;
+				}
+				$bapValidatorCopied = true;
 			}
 
 			$lineIdsOfOrder = array_flip($lineIdsOfOrder);

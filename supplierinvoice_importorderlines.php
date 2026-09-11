@@ -478,6 +478,10 @@ print '</form>';
 
 print '<script>
 jQuery(function($) {
+	$("#checkallactions").on("change", function() {
+		$("input.checkforselect").prop("checked", this.checked).trigger("change");
+	});
+
 	$("input.checkforselect").on("change", function() {
 		var sum = 0;
 		$("input.checkforselect:checked").each(function() {
