@@ -187,6 +187,7 @@ if (!getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP')) {
 	$item = $formSetup->newItem('EINVOICING_ENABLE_API_VALIDATION')->setAsYesNo();
 	$item->helpText = $langs->transnoentities('EINVOICING_ENABLE_API_VALIDATION_HELP');
 	$item->defaultFieldValue = '0';
+	//$item->fieldParams['warningifon'] = 1;
 	$item->cssClass = 'minwidth500';
 
 	// Local EN 16931 business rules check (BR, BR-CO, BR-FR subset) on the generated XML.
@@ -271,6 +272,12 @@ if (!getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP')) {
 	$item->defaultFieldValue = '0';
 	$item->cssClass = 'minwidth500';
 
+	// Setup list of POS modules - Do not generate einvoice
+	$item = $formSetup->newItem('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS');
+	$item->helpText = $langs->transnoentities('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS_HELP');
+	$item->defaultFieldValue = getDolGlobalString('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS', 'takepos');
+	$item->cssClass = 'minwidth500';
+
 	// The VAT regime the generated documents declare in BT-8. Left to the VAT mode above by default;
 	// an explicit value is for a seller whose regime that mode cannot express (issue #419).
 	$item = $formSetup->newItem('EINVOICING_VAT_POINT_DATE_CODE')->setAsSelect(array(
@@ -344,12 +351,6 @@ if (!getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP')) {
 	$item->fieldInputOverride = $langs->trans("Mandatory");
 	//$item->enabled = 0;
 	$item->cssClass = 'opacitymedium';
-
-	// Setup conf for PMD - Mention regarding late payment penalties
-	$item = $formSetup->newItem('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS');
-	$item->helpText = $langs->transnoentities('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS_HELP');
-	$item->defaultFieldValue = getDolGlobalString('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS', 'takepos');
-	$item->cssClass = 'minwidth500';
 
 	/*
 	$itemtitle->helpText = $langs->trans('EINVOICING_VAT_EXIGIBILITY_HELP').' <b>'
