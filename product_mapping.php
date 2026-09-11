@@ -252,6 +252,13 @@ $help_url = '';
 
 llxHeader('', $title, $help_url, '', 0, 0, '', '', '', 'mod-einvoicing page-product_mapping');
 
+if (getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP") && $conf->entity != getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP")) {
+	print $langs->trans("EInvoicingInfoManagedByMasterSetup", getDolGlobalInt("EINVOICING_MULTICOMPANY_USE_MASTER_SETUP"));
+
+	llxFooter();
+	exit;
+}
+
 print load_fiche_titre($title, '', 'einvoicing.png@einvoicing');
 
 // The mappings saved here are only visible product by product afterwards, so point to the list of them.
@@ -270,7 +277,14 @@ print '<input type="text" class="width200" name="flowid" value="'.dol_escape_htm
 print '</div>';
 print ' &nbsp; ';
 print '<div class="inline-block valignmiddle paddingright">'.$langs->trans("Supplier").' ';
-print $form->select_company($socid, 'socid', '(s.fournisseur:=:1)', 'SelectThirdParty', 0, 0, array(), 0, 'minwidth200');
+// Form::select_company() does not read this filter the same way on every version. Until Dolibarr 18
+// the criteria is appended to the query as it stands, so it has to be plain SQL; from 18 a criteria
+// holding parentheses is converted by forgeSQLFromUniversalSearchCriteria(), and on 24 that conversion
+// is no longer conditional - every criteria goes through it. Passing the Universal Search syntax to 17
+// therefore ends the page on "DB_ERROR_SYNTAX ... near ':=:1))'", and passing plain SQL to 24 would be
+// mangled the other way round.
+$vendorfilter = ((float) DOL_VERSION < 18) ? 's.fournisseur = 1' : '(s.fournisseur:=:1)';
+print $form->select_company($socid, 'socid', $vendorfilter, 'SelectThirdParty', 0, 0, array(), 0, 'minwidth200');
 print '</div>';
 print '<input type="submit" class="button small" value="'.$langs->trans("Refresh").'">';
 print '</form>';
@@ -290,6 +304,7 @@ if (!empty($parsedLines)) {
 	// Run the matching on each line (read only, nothing is created here)
 	// The matching method comes from the CommonProtocol trait, used by the protocols able to import an invoice.
 	'@phan-var-force ?CIIProtocol $protocol';
+	/** @var ?CIIProtocol $protocol */
 	$nbtomap = 0;
 	$matchresults = array();
 	foreach ($parsedLines as $idx => $parsedLine) {

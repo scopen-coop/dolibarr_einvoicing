@@ -187,7 +187,15 @@ class modEInvoicing extends DolibarrModules
 			'fr_FR:ParentCompany'=>'Maison mère ou revendeur'
 		)*/
 
-		if (!isModEnabled("einvoicing")) {
+		// For retrocompatibility with older Dolibarr versions to avoid crashing when module is present into custom modules repository of an older Dolibarr installation
+		if (function_exists('isModEnabled')) {
+			$moduleIsEnabled = isModEnabled("einvoicing");
+		} else {
+			$moduleIsEnabled = !empty($conf->einvoicing->enabled);
+		}
+
+		// Check if the module is enabled and initialize the configuration if not
+		if (!$moduleIsEnabled) {
 			$conf->einvoicing = new stdClass();
 			$conf->einvoicing->enabled = 0;
 		}
@@ -196,9 +204,7 @@ class modEInvoicing extends DolibarrModules
 		/* BEGIN MODULEBUILDER TABS */
 		// Don't forget to deactivate/reactivate your module to test your changes
 		$this->tabs = array();
-		//$this->tabs[] = array('data' => 'invoice:+CustomerLCtab:einvoicecustomerlctab:einvoicing@einvoicing:$user->hasRight("facture", "read"):/einvoicing/einvoice_object_timeline.php?id=__ID__');
-
-		//$this->tabs[] = array('data' => 'invoice:+EinvoiceEvents:EinvoiceEventsTab:@einvoicing:$user->hasRight("facture","read"):/einvoicing/einvoice_events.php?id=__ID__&elementtype=invoice');
+		$this->tabs[] = array('data' => 'invoice:+EinvoiceEvents:EinvoiceEventsTab:@einvoicing:$user->hasRight("facture","read"):/einvoicing/einvoice_tracking.php?id=__ID__');
 
 		/* END MODULEBUILDER TABS */
 		// Example:
@@ -373,7 +379,7 @@ class modEInvoicing extends DolibarrModules
 			'url' => '/einvoicing/einvoicingindex.php',
 			'langs' => 'einvoicing@einvoicing',
 			'position' => 1000,
-			'enabled' => 'isModEnabled("einvoicing")',
+			'enabled' => 'isModEnabled("einvoicing") && !getDolGlobalString("EINVOICING_ONLY_GENERATE")',
 			'perms' => '$user->hasRight("einvoicing", "read")',
 			'target' => '',
 			'user' => 2,
@@ -390,7 +396,7 @@ class modEInvoicing extends DolibarrModules
 			'url' => '/einvoicing/document_list.php',
 			'langs' => 'einvoicing@einvoicing',
 			'position' => 1001,
-			'enabled' => 'isModEnabled("einvoicing")',
+			'enabled' => 'isModEnabled("einvoicing") && !getDolGlobalString("EINVOICING_ONLY_GENERATE")',
 			'perms' => '$user->hasRight("einvoicing", "write")',
 			'target' => '',
 			'user' => 2,
@@ -407,7 +413,7 @@ class modEInvoicing extends DolibarrModules
 			'url' => '/einvoicing/product_mapping.php',
 			'langs' => 'einvoicing@einvoicing',
 			'position' => 1002,
-			'enabled' => 'isModEnabled("einvoicing")',
+			'enabled' => 'isModEnabled("einvoicing") && !getDolGlobalString("EINVOICING_ONLY_GENERATE")',
 			'perms' => '$user->hasRight("einvoicing", "write")',
 			'target' => '',
 			'user' => 2,
@@ -424,7 +430,7 @@ class modEInvoicing extends DolibarrModules
 			'url' => '/einvoicing/vendorref_list.php',
 			'langs' => 'einvoicing@einvoicing',
 			'position' => 1003,
-			'enabled' => 'isModEnabled("einvoicing")',
+			'enabled' => 'isModEnabled("einvoicing") && !getDolGlobalString("EINVOICING_ONLY_GENERATE")',
 			'perms' => '$user->hasRight("einvoicing", "read")',
 			'target' => '',
 			'user' => 2,
@@ -458,7 +464,7 @@ class modEInvoicing extends DolibarrModules
 			'url' => '/einvoicing/call_list.php',
 			'langs' => 'einvoicing@einvoicing',
 			'position' => 1003,
-			'enabled' => 'isModEnabled("einvoicing")',
+			'enabled' => 'isModEnabled("einvoicing") && !getDolGlobalString("EINVOICING_ONLY_GENERATE")',
 			'perms' => '$user->hasRight("einvoicing", "read")',
 			'target' => '',
 			'user' => 2,
