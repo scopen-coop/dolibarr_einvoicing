@@ -44,7 +44,7 @@ if ((float) DOL_VERSION < 18) {
 dol_include_once('einvoicing/class/protocols/AbstractProtocol.class.php');
 dol_include_once('einvoicing/class/protocols/CommonProtocol.class.php');
 dol_include_once('einvoicing/class/einvoicing.class.php');
-dol_include_once('einvoicing/class/utils/XmlPatcher.class.php');
+dol_include_once('einvoicing/class/utils/EmbeddedXmlReader.class.php');
 dol_include_once('einvoicing/class/utils/SupplierInvoiceHelper.class.php');
 dol_include_once('einvoicing/lib/einvoicing.lib.php');
 
@@ -520,7 +520,7 @@ class CIIProtocol extends AbstractProtocol
 		dol_mkdir(dirname($xmlfile));
 		dol_delete_file($xmlfile);
 
-		$xmlcontent = $this->buildXML($invoiceData, $linesData, $this->getBuildXmlProfile(), $outputlangs);
+		$xmlcontent = $this->buildXML($invoiceData, $linesData, $this->getBuildXmlProfile($object), $outputlangs);
 
 		// Local EN 16931 business rules safety net, and check that the document claims the amount the
 		// invoice claims (warnings, or abort in strict mode)
@@ -777,6 +777,26 @@ class CIIProtocol extends AbstractProtocol
 		}
 
 		return true;
+	}
+
+	/**
+	 * Amount the document declares already paid that the import still has to attach (BT-113).
+	 *
+	 * BR-FR-CO-09 reads BT-23 in B2, S2 or M2 as "invoice already paid": BT-113 then equals BT-112 and
+	 * BT-115 is zero, the vendor having cashed the invoice in as he issued it. Nothing is missing from
+	 * such an invoice, so nothing is waited for and nothing is deducted (PR #904, PR #911).
+	 *
+	 * @param  array<string,mixed>	$parsedHeader	Parsed header of the received document
+	 * @return float								The amount still to attach, 0 when there is none to look for
+	 */
+	protected function depositAnnouncedByDocument(array $parsedHeader)
+	{
+		$announced = abs((float) ($parsedHeader['totalPrepaidAmount'] ?? 0));
+		if ($announced < 0.005 || in_array((string) ($parsedHeader['businessProcessId'] ?? ''), array('B2', 'S2', 'M2'), true)) {
+			return 0.0;
+		}
+
+		return $announced;
 	}
 
 	/**
@@ -1361,11 +1381,12 @@ class CIIProtocol extends AbstractProtocol
 							continue;
 						}
 
-						// Unqualified, and the document declares an amount already paid (BT-113): that is the
-						// missing deposit, and stepping over it would import an invoice short of its
-						// deduction. The flow is postponed - nothing is stored, syncFlow() rolls back, and
-						// the next run takes it again, the way BG-3 is already handled at document level.
-						if (abs((float) ($parsedHeader['totalPrepaidAmount'] ?? 0)) > 0) {
+						// Unqualified, and the document declares a deposit still to attach: stepping over it
+						// would import an invoice short of its deduction. The flow is postponed - nothing is
+						// stored, syncFlow() rolls back, and the next run takes it again, the way BG-3 is
+						// already handled at document level. An invoice the vendor cashed in himself
+						// announces no deposit here, and waiting for one would wait for ever.
+						if ($this->depositAnnouncedByDocument($parsedHeader) > 0) {
 							return $this->postponeForMissingLineDocument((string) $lineRefDocId, (string) $parsedLine['lineid'], (int) $parsedLine['supplierId'], $parsedHeader);
 						}
 
@@ -2198,15 +2219,13 @@ class CIIProtocol extends AbstractProtocol
 	 * EXTENDED-CTC-FR profile of the French mandate without editing the code. An unknown value is
 	 * logged and ignored rather than aborting the generation.
 	 *
-	 * With Chorus Pro support on, the profile is raised to EXTENDED-CTC-FR: the B2G rules of
-	 * XP Z12-012 ask the buyer party for its SIRET (BR-FR-CPRO-10) and, when the directory demands one,
-	 * for a service code as well (BR-FR-CPRO-11) - two private identifiers, where the profiles below
-	 * EXTENDED allow a single one (FX-SCH-A-000164). A public sector invoice built as EN16931 therefore
-	 * cannot carry what the buyer needs to route it.
+	 * On top of that, the profile is raised to EXTENDED-CTC-FR on its own when this invoice matches a
+	 * known, precise case that needs it - see needsExtendedFrProfile().
 	 *
-	 * @return 	string 		Profile name, uppercased
+	 * @param 	CommonInvoice 	$object 	Invoice being generated, read by needsExtendedFrProfile()
+	 * @return 	string 						Profile name, uppercased
 	 */
-	protected function getBuildXmlProfile()
+	protected function getBuildXmlProfile($object)
 	{
 		$profile = static::BUILD_XML_PROFILE;
 
@@ -2220,12 +2239,49 @@ class CIIProtocol extends AbstractProtocol
 			}
 		}
 
-		if (getDolGlobalInt('EINVOICING_USE_CHORUS') && !$this->isExtendedProfile($profile)) {
-			dol_syslog(get_class($this).'::getBuildXmlProfile Chorus Pro support is on: profile raised from '.$profile.' to EXTENDEDFR, which is the only one that carries the B2G identifiers of the buyer', LOG_NOTICE);
+		if ($this->needsExtendedFrProfile($object) && !$this->isExtendedProfile($profile)) {
+			dol_syslog(get_class($this).'::getBuildXmlProfile profile raised from '.$profile.' to EXTENDEDFR, see needsExtendedFrProfile()', LOG_NOTICE);
 			return 'EXTENDEDFR';
 		}
 
 		return $profile;
+	}
+
+	/**
+	 * Tell whether this invoice looks like a B2G (Chorus Pro) invoice.
+	 *
+	 * @param 	CommonInvoice 	$object 	Invoice being generated
+	 * @return 	bool 						True if the invoice carries a Chorus Pro extrafield
+	 */
+	protected function looksLikeB2GInvoice($object)
+	{
+		$chorusExtrafields = ['d4d_service_code', 'd4d_contract_number', 'd4d_promise_code'];
+		foreach ($chorusExtrafields as $extrafield) {
+			if (trim((string) ($object->array_options['options_'.$extrafield] ?? '')) !== '') {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Tell whether this invoice needs the EXTENDED-CTC-FR profile.
+	 *
+	 * The switch to EXTENDED-CTC-FR must stay confined to known precise cases.
+	 * Known cases are checked individually in this method.
+	 *
+	 * @param 	CommonInvoice 	$object 	Invoice being generated
+	 * @return 	bool 						True if the document needs the EXTENDED-CTC-FR profile
+	 */
+	protected function needsExtendedFrProfile($object)
+	{
+		// The invoice looks like a B2G one.
+		if (getDolGlobalInt('EINVOICING_USE_CHORUS') && $this->looksLikeB2GInvoice($object)) {
+			return true;
+		}
+
+		return false;
 	}
 
 	/**
@@ -3066,7 +3122,12 @@ class CIIProtocol extends AbstractProtocol
 
 		// TradeAddressType is reduced to the country code by the MINIMUM schema
 		if (!$this->isMinimumProfile($profile)) {
-			$addr->appendChild($doc->createElement('ram:PostcodeCode', einvoicingXmlText((string) $data[$prefix . 'postcode'])));
+			// The post code (BT-38, BT-53) and the city (BT-37, BT-52) are optional terms: an absent one
+			// is written as nothing at all, an empty element being refused by PEPPOL-EN16931-R008. Only
+			// the country below is mandatory, and the caller has already refused a party without one.
+			if (!empty($data[$prefix . 'postcode'])) {
+				$addr->appendChild($doc->createElement('ram:PostcodeCode', einvoicingXmlText((string) $data[$prefix . 'postcode'])));
+			}
 			// The three address lines the norm has: BT-35/36/162 for the seller, BT-50/51/163 for the
 			// buyer. XSD order inside TradeAddressType is PostcodeCode, LineOne, LineTwo, LineThree,
 			// CityName, CountryID - the elements are written in that order and nowhere else.
@@ -3079,7 +3140,9 @@ class CIIProtocol extends AbstractProtocol
 			if (!empty($data[$prefix . 'linethree'])) {
 				$addr->appendChild($doc->createElement('ram:LineThree', einvoicingXmlText($data[$prefix . 'linethree'])));
 			}
-			$addr->appendChild($doc->createElement('ram:CityName', einvoicingXmlText($data[$prefix . 'city'])));
+			if (!empty($data[$prefix . 'city'])) {
+				$addr->appendChild($doc->createElement('ram:CityName', einvoicingXmlText($data[$prefix . 'city'])));
+			}
 		}
 		$addr->appendChild($doc->createElement('ram:CountryID', einvoicingXmlText((string) $data[$prefix . 'country'])));
 
@@ -3736,10 +3799,30 @@ class CIIProtocol extends AbstractProtocol
 		}
 		$announcedTva = abs((float) $parsedHeader['taxTotalAmount']);
 		$announcedTtc = abs((float) $parsedHeader['grandTotalAmount']);
-		// BT-113 is what the document says was already paid, a deposit in practice. It moves neither
-		// BT-110 nor BT-112, so the two totals below agree whether or not the deposit was deducted, and
-		// an invoice short of its deduction used to pass this guard and be paid in full (issue #726).
+		// BT-113 is what the document says was already paid. It moves neither BT-110 nor BT-112, so the
+		// two totals below agree whether or not it was deducted, and an invoice short of its deduction
+		// used to pass this guard and be paid in full (issue #726).
 		$announcedPrepaid = isset($parsedHeader['totalPrepaidAmount']) ? abs((float) $parsedHeader['totalPrepaidAmount']) : null;
+
+		// Two things say that amount is not a deposit to deduct: BT-23 saying the invoice was already
+		// paid, and a document referencing no preceding invoice (BG-3), which points at nothing - BG-3
+		// being the only thing the import ever attaches a deposit from. Reported by the maintainer on #904.
+		if ($announcedPrepaid !== null
+			&& ($this->depositAnnouncedByDocument($parsedHeader) <= 0 || empty($parsedHeader['invoiceRefDocs']))) {
+			// What the import did attach is named, and says nothing when it covers the announced amount:
+			// the deduction is there, and inviting a payment on top of it would settle it twice.
+			$deducted = SupplierInvoiceHelper::linkedDepositAmount($supplierInvoiceId);
+			if ($announcedPrepaid >= 0.005 && abs($deducted - $announcedPrepaid) >= 0.005) {
+				$langs->load('einvoicing@einvoicing');
+				$return_messages[] = $langs->trans(
+					'EInvoiceImportPrepaidAlreadySettled',
+					dol_escape_htmltag((string) ($parsedHeader['documentno'] ?? '')),
+					price2num($announcedPrepaid, 'MT'),
+					price2num($deducted, 'MT')
+				);
+			}
+			$announcedPrepaid = null;
+		}
 
 		require_once DOL_DOCUMENT_ROOT . '/fourn/class/fournisseur.facture.class.php';
 
