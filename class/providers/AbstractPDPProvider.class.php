@@ -1208,6 +1208,7 @@ abstract class AbstractPDPProvider
 		$document->cdar_reason_code = isset($refDoc['StatusReasonCode']) ? $refDoc['StatusReasonCode'] : '';
 		$document->cdar_reason_desc = isset($refDoc['StatusReason']) ? $refDoc['StatusReason'] : '';
 		$document->cdar_reason_detail = isset($refDoc['StatusIncludedNoteContent']) ? $refDoc['StatusIncludedNoteContent'] : '';
+		$recipientRoles = CdarHandler::recipientRoles($cdarDocument);
 
 		// The referenced document is the vendor invoice, identified the way its issuer numbered it:
 		// that is our ref_supplier, and the issuing party is the vendor it belongs to.
@@ -1256,6 +1257,15 @@ abstract class AbstractPDPProvider
 
 		$statusComment = $document->cdar_reason_detail ? $document->cdar_reason_detail : $document->cdar_reason_desc;
 
+		// What the vendor reports in figures (MDG-43): the amount cashed in of a 212 above all, which is
+		// the only thing telling a cash-in from the refund of a credit note (both are a 212).
+		$amountsReported = empty($refDoc['StatusCharacteristics'])
+			? ''
+			: CdarHandler::describeStatusCharacteristics($refDoc['StatusCharacteristics'], $langs);
+		if ($amountsReported !== '') {
+			$statusComment = $statusComment ? $amountsReported . ' - ' . $statusComment : $amountsReported;
+		}
+
 		$db->begin();
 
 		// Neither write throws: a SQL failure comes back as -1, so the rollback below is only reachable
@@ -1274,7 +1284,8 @@ abstract class AbstractPDPProvider
 			$document->ack_status,
 			$document->ack_info,
 			$document->submittedat,
-			$document->cdar_reason_code
+			$document->cdar_reason_code,
+			$recipientRoles
 		) : -1);
 
 		if ($resExtLink <= 0 || $resStatusMessage <= 0) {
@@ -1286,10 +1297,10 @@ abstract class AbstractPDPProvider
 		$db->commit();
 
 		$statusLabel = $document->cdar_lifecycle_label ? $document->cdar_lifecycle_label : $document->cdar_lifecycle_code;
-		$reasonDetail = $document->cdar_reason_detail ? " - " . $document->cdar_reason_detail : '';
+		$reasonDetail = $statusComment ? " - " . $statusComment : '';
 		$this->addEvent('STATUS', "EINVOICING - Status: " . $statusLabel, "EINVOICING - Status: " . $statusLabel . $reasonDetail, $supplierInvoice);
 
-		return array('res' => 1, 'message' => "FlowId " . $flowId . " - Vendor status " . $document->cdar_lifecycle_code . " recorded on supplier invoice " . $supplierInvoice->ref);
+		return array('res' => 1, 'message' => "FlowId " . $flowId . " - Vendor status " . $document->cdar_lifecycle_code . ($amountsReported !== '' ? " (" . $amountsReported . ")" : '') . " recorded on supplier invoice " . $supplierInvoice->ref);
 	}
 
 	/**

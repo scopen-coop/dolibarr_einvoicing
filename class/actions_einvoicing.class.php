@@ -454,7 +454,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 
 
 		// Add buttons in supplier invoice card (we test context invoicesuppliercard but also main for old versions of module)
-		if (in_array($object->element, ['invoice_supplier']) && !einvoicingIsReceiveDisabled() && preg_match('/invoicesuppliercard|main/', $parameters['currentcontext'] ?? '')) {
+		if (in_array($object->element, ['invoice_supplier']) && !einvoicingReceptionDisabled() && preg_match('/invoicesuppliercard|main/', $parameters['currentcontext'] ?? '')) {
 			$url_button = array();
 
 			// Check if this invoice is present into einvoicing_extlinks table to know if it is an imported invoice from PDP or not
@@ -611,7 +611,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 		$currentStatusDetails = null;
 
 		$isFactureContext = isset($object->element) && in_array($object->element, ['facture']) && !getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP');
-		$isSupplierInvoiceContext = isset($object->element) && in_array($object->element, ['invoice_supplier']) && !einvoicingIsReceiveDisabled();
+		$isSupplierInvoiceContext = isset($object->element) && in_array($object->element, ['invoice_supplier']) && !einvoicingReceptionDisabled();
 		$isThirdpartyContext = array_intersect(['thirdpartycard', 'thirdpartycomm'], $contexts)
 			&& (!getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP') || !getDolGlobalString('EINVOICING_DISABLE_SYNC_AP_TO_DOLI') || getDolGlobalString('EINVOICING_ONLY_GENERATE'));
 
@@ -993,7 +993,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 
 				// Default product for import
 				$routingProductId = GETPOST('routing_product_id', 'aZ09');
-				if ($routingProductId !== '' && $routingProductId !== '-1' && !einvoicingIsReceiveDisabled()) {
+				if ($routingProductId !== '' && $routingProductId !== '-1' && !einvoicingReceptionDisabled()) {
 					$existing = $einvoicing->fetchDefaultRouting($socId, 'product');
 					if (empty($existing)) {
 						$result = $einvoicing->addRouting($socId, $routingProductId, '', 'product');
@@ -1380,7 +1380,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 		}
 		$langs->load("einvoicing@einvoicing");
 
-		if (in_array($object->element, ['invoice_supplier']) && !einvoicingIsReceiveDisabled()) {
+		if (in_array($object->element, ['invoice_supplier']) && !einvoicingReceptionDisabled()) {
 			// Clone confirmation
 			if ($action == 'sendStatusMessage') {
 				$form = new Form($db);
@@ -1503,14 +1503,14 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 			}
 
 			// Add block in supplier invoice card (reception only)
-			if (in_array($object->element, ['invoice_supplier']) && !einvoicingIsReceiveDisabled()) {
+			if (in_array($object->element, ['invoice_supplier']) && !einvoicingReceptionDisabled()) {
 				'@phan-var-force FactureFournisseur $object';
 				/** @var FactureFournisseur $object */
 				$this->resprints .= $einvoicing->supplierInvoiceCardBlock($object, $action, $parameters);		// Output fields in card, including js for refreshing state
 			}
 
 			// Add block in product/service card  (reception only)
-			if (in_array($object->element, ['product']) && !einvoicingIsReceiveDisabled()) {
+			if (in_array($object->element, ['product']) && !einvoicingReceptionDisabled()) {
 				'@phan-var-force Product $object';
 				/** @var Product $object */
 				$this->resprints .= $einvoicing->productServiceCardBlock($object, $action, $parameters);		// Output fields in card, including js for refreshing state
@@ -1595,7 +1595,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 				);
 			}
 			// Default product for import: reception only.
-			if (!einvoicingIsReceiveDisabled()) {
+			if (!einvoicingReceptionDisabled()) {
 				$arrayfields['routing_product_id'] = array(
 					'label' => 'DefaultProductEBilling',
 					'checked' => -1,
@@ -1626,6 +1626,22 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 	}
 
 	/**
+	 * Build the sub query returning the recipients the last lifecycle status of a customer invoice was
+	 * addressed to. Same source as EInvoicing::fetchLastknownInvoiceStatus(), which the card reads, so
+	 * a rejection is named the same way in the list and on the card (issue #973).
+	 *
+	 * @return string								SQL sub query (without the surrounding parenthesis), correlated on f.rowid
+	 */
+	protected static function getCustomerLifecycleRolesSubQuery()
+	{
+		$sql = 'SELECT lc.lc_recipient_roles FROM ' . MAIN_DB_PREFIX . 'einvoicing_lifecycle_msg as lc';
+		$sql .= " WHERE lc.element_type = 'facture' AND lc.element_id = f.rowid";
+		$sql .= ' ORDER BY lc.rowid DESC LIMIT 1';
+
+		return $sql;
+	}
+
+	/**
 	 * Add SELECT fields
 	 *
 	 * @param array<string,mixed> 	$parameters		Array of parameters
@@ -1640,6 +1656,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 		if (in_array('invoicelist', explode(':', $parameters['context']))) {
 			$this->resprints .= ', ext.rowid AS pdplink_id, ext.provider AS pdp_provider';
 			$this->resprints .= ', ext.syncstatus AS pdp_syncstatus';
+			$this->resprints .= ', (' . self::getCustomerLifecycleRolesSubQuery() . ') AS pdp_lcrecipients';
 		}
 
 		// Supplier invoice list, Product list, Soc list
@@ -1778,7 +1795,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 			}
 		}
 
-		if (in_array('supplierinvoicelist', $contexts) && !einvoicingIsReceiveDisabled() && GETPOST('search_pdp_lcstatus', 'alpha') !== '' && GETPOST('search_pdp_lcstatus', 'alpha') != -2) {
+		if (in_array('supplierinvoicelist', $contexts) && !einvoicingReceptionDisabled() && GETPOST('search_pdp_lcstatus', 'alpha') !== '' && GETPOST('search_pdp_lcstatus', 'alpha') != -2) {
 			$this->resprints .= ' AND (' . self::getSupplierLifecycleStatusSubQuery() . ') = ' . GETPOSTINT('search_pdp_lcstatus');
 		}
 
@@ -1897,7 +1914,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 		}
 
 		// Supplier invoice list, Product list, Soc list
-		if (in_array('supplierinvoicelist', explode(':', $parameters['context'])) && !einvoicingIsReceiveDisabled()) {
+		if (in_array('supplierinvoicelist', explode(':', $parameters['context'])) && !einvoicingReceptionDisabled()) {
 			$tmpeinvoicingpartner = preg_replace('/ViaPartner/i', '', getDolGlobalString('EINVOICING_PDP'));
 			$listofoptions = array(
 				$tmpeinvoicingpartner => $tmpeinvoicingpartner,
@@ -1998,7 +2015,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 		}
 
 		// Supplier invoice list, Product list, Soc list
-		if (in_array('supplierinvoicelist', $contexts) && !einvoicingIsReceiveDisabled()) {
+		if (in_array('supplierinvoicelist', $contexts) && !einvoicingReceptionDisabled()) {
 			print_liste_field_titre($langs->transnoentitiesnoconv('einvoicingSourceTitle'));
 			print_liste_field_titre($langs->transnoentitiesnoconv('einvoicingInvoiceStatus'), '', '', '', $parameters['param'] ?? '', '', '', '', 'center ');
 		}
@@ -2078,7 +2095,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 
 			// E-invoice sync status
 			if (empty($parameters['arrayfields']['pdp_syncstatus']) || !empty($parameters['arrayfields']['pdp_syncstatus']['checked'])) {
-				$currentStatusDetails = $obj->pdp_syncstatus ? $einvoicing->getStatusLabel($obj->pdp_syncstatus) : '';
+				$currentStatusDetails = $obj->pdp_syncstatus ? $einvoicing->getStatusLabel($obj->pdp_syncstatus, 'facture', $obj->pdp_lcrecipients ?? '') : '';
 				print '<td class="center tdoverflowmax100" title="' . dolPrintHTMLForAttribute($currentStatusDetails) . '">';
 				print $currentStatusDetails;
 				print '</td>';
@@ -2089,7 +2106,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 		}
 
 		// Supplier invoice list, Product list, Soc list
-		if (in_array('supplierinvoicelist', $contexts) && !einvoicingIsReceiveDisabled()) {
+		if (in_array('supplierinvoicelist', $contexts) && !einvoicingReceptionDisabled()) {
 			$obj = $parameters['obj'];
 
 			print '<td class="tdoverflowmax100">';
@@ -2103,7 +2120,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 
 			// E-invoice status of the supplier invoice into the Access Point system
 			$einvoicing = new EInvoicing($db);
-			$currentStatusDetails = $obj->pdp_lcstatus ? $einvoicing->getStatusLabel((int) $obj->pdp_lcstatus) : '-';
+			$currentStatusDetails = $obj->pdp_lcstatus ? $einvoicing->getStatusLabel((int) $obj->pdp_lcstatus, 'invoice_supplier') : '-';
 			print '<td class="center tdoverflowmax100" title="' . dolPrintHTMLForAttribute($currentStatusDetails) . '">';
 			print $currentStatusDetails;
 			print '</td>';

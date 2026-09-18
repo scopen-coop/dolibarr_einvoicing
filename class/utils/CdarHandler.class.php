@@ -976,7 +976,7 @@ class CdarHandler
 	 * parseExchangedDocument
 	 *
 	 * @param  SimpleXmlElement $xml xml
-	 * @return array<string,string|array<string,string>>
+	 * @return array<string,string|array<string,string>|array<int,array<string,string>>>
 	 */
 	private function parseExchangedDocument($xml)
 	{
@@ -996,8 +996,69 @@ class CdarHandler
 				'RoleCode' => $this->getXpathValue($xml, '//rsm:ExchangedDocument/ram:RecipientTradeParty/ram:RoleCode'),
 				'URIID' => $this->getXpathValue($xml, '//rsm:ExchangedDocument/ram:RecipientTradeParty/ram:URIUniversalCommunication/ram:URIID'),
 				'URISchemeID' => $this->getXpathAttribute($xml, '//rsm:ExchangedDocument/ram:RecipientTradeParty/ram:URIUniversalCommunication/ram:URIID', 'schemeID')
-			]
+			],
+			// The key above keeps the FIRST recipient, which is all the callers reading it need. A
+			// lifecycle message may address several, and which ones is what tells a rejection posted
+			// at emission from one posted at reception (issue #973), so keep the whole list too.
+			'RecipientTradeParties' => $this->parseRecipientTradeParties($xml)
 		];
+	}
+
+	/**
+	 * Every ExchangedDocument/RecipientTradeParty of a CDAR, in document order.
+	 *
+	 * XP Z12-012 annex A, sheet "Acteurs CDV", gives a status one recipient per audience: a rejection
+	 * posted at emission is addressed to the seller alone, one posted at reception to the seller AND
+	 * the buyer. Nothing else in a 213 says which platform posted it - issuer and sender are both the
+	 * generic "WK" with an empty identifier on the documents seen so far.
+	 *
+	 * @param  SimpleXMLElement $xml	CDAR with the namespaces registered
+	 * @return array<int,array{GlobalID:string,SchemeID:string,RoleCode:string,Name:string}>
+	 */
+	private function parseRecipientTradeParties($xml)
+	{
+		$parties = array();
+
+		$nodes = $this->registerNamespaces($xml)->xpath('//rsm:ExchangedDocument/ram:RecipientTradeParty');
+		if (empty($nodes)) {
+			return $parties;
+		}
+
+		foreach ($nodes as $node) {
+			$parties[] = array(
+				'GlobalID' => $this->getXpathValue($node, 'ram:GlobalID'),
+				'SchemeID' => $this->getXpathAttribute($node, 'ram:GlobalID', 'schemeID'),
+				'RoleCode' => $this->getXpathValue($node, 'ram:RoleCode'),
+				'Name' => $this->getXpathValue($node, 'ram:Name')
+			);
+		}
+
+		return $parties;
+	}
+
+	/**
+	 * The RoleCodes of the recipients above, comma separated, as stored on a lifecycle message
+	 * (llx_einvoicing_lifecycle_msg.lc_recipient_roles): "SE", "SE,BY"...
+	 *
+	 * @param  array<string,mixed> $cdarDocument	Result of readFromString()
+	 * @return string								Empty when the CDAR names no recipient
+	 */
+	public static function recipientRoles($cdarDocument)
+	{
+		$parties = $cdarDocument['ExchangedDocument']['RecipientTradeParties'] ?? array();
+		if (!is_array($parties)) {
+			return '';
+		}
+
+		$roles = array();
+		foreach ($parties as $party) {
+			$role = trim((string) ($party['RoleCode'] ?? ''));
+			if ($role !== '' && !in_array($role, $roles, true)) {
+				$roles[] = $role;
+			}
+		}
+
+		return implode(',', $roles);
 	}
 
 	/**
@@ -1074,9 +1135,66 @@ class CdarHandler
 				$result['StatusIncludedNoteContents'] = $allContents;               // array of all notes
 				$result['StatusIncludedNoteContent'] = implode("\n", $allContents); // backward-compatible string
 			}
+
+			// MDG-43 blocks: what the status is about in figures - the amount cashed in (MEN) of a 212,
+			// the amount paid (MPA) of a 211, what is left to pay (RAP), ...
+			$characteristics = array();
+			foreach ($statusNodes as $statusNode) {
+				foreach ($this->registerNamespaces($statusNode)->xpath('ram:SpecifiedDocumentCharacteristic') as $node) {
+					$block = array(
+						'TypeCode' => $this->getXpathValue($node, 'ram:TypeCode'),
+						'ValueAmount' => $this->getXpathValue($node, 'ram:ValueAmount'),
+						'CurrencyID' => $this->getXpathAttribute($node, 'ram:ValueAmount', 'currencyID'),
+						'ValuePercent' => $this->getXpathValue($node, 'ram:ValuePercent'),
+						'ValueDateTime' => $this->getXpathValue($node, 'ram:ValueDateTime/qdt:DateTimeString')
+					);
+					if ($block['TypeCode'] !== '' || $block['ValueAmount'] !== '') {
+						$characteristics[] = $block;
+					}
+				}
+			}
+			if (!empty($characteristics)) {
+				$result['StatusCharacteristics'] = $characteristics;
+			}
 		}
 
 		return $result;
+	}
+
+	/**
+	 * Describe the MDG-43 blocks of a received status in one line, for the status comment and the log.
+	 *
+	 * @param  array<array{TypeCode?:string,ValueAmount?:string,CurrencyID?:string,ValuePercent?:string,ValueDateTime?:string}> $characteristics Blocks as parsed from the CDAR
+	 * @param  Translate $langs Translate object
+	 * @return string           One line, empty when no block carries an amount
+	 */
+	public static function describeStatusCharacteristics($characteristics, $langs)
+	{
+		$parts = array();
+
+		foreach ($characteristics as $block) {
+			if (!isset($block['ValueAmount']) || $block['ValueAmount'] === '') {
+				continue;	// A block with no amount says nothing a reader can use
+			}
+
+			// A cash-in and a cash-out are both a 212, told apart by the sign alone (rule P1.15): say
+			// which one this is rather than leave "Cashed in -240.00" on the screen.
+			$code = isset($block['TypeCode']) ? (string) $block['TypeCode'] : '';
+			$key = 'EInvCdarAmount' . $code . ($code === 'MEN' && (float) $block['ValueAmount'] < 0 ? 'Negative' : '');
+			$label = ($code !== '' && $langs->trans($key) !== $key) ? $langs->trans($key) : $code;
+
+			$one = price((float) $block['ValueAmount'], 0, $langs, 1, -1, -1, !empty($block['CurrencyID']) ? $block['CurrencyID'] : '');
+			if (isset($block['ValuePercent']) && $block['ValuePercent'] !== '') {
+				$one .= ' (' . vatrate((string) $block['ValuePercent'], true) . ')';
+			}
+			if (!empty($block['ValueDateTime'])) {
+				$one .= ' ' . dol_print_date(dol_stringtotime($block['ValueDateTime']), 'day');
+			}
+
+			$parts[] = ($label !== '' ? $label . ' ' : '') . $one;
+		}
+
+		return implode(', ', $parts);
 	}
 
 	// ==================== GENERATION ====================
