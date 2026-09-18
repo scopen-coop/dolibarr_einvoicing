@@ -24,6 +24,7 @@
  */
 
 require_once __DIR__ . '/../../lib/einvoicing.lib.php';	// removeAllSpaces(), used to normalize an electronic address
+require_once DOL_DOCUMENT_ROOT . '/core/lib/files.lib.php';	// dol_is_dir(), dol_mkdir() and file helpers
 
 
 /**
