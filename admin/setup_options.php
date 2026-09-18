@@ -70,10 +70,10 @@ if (!$res) {
  */
 // Libraries
 require_once DOL_DOCUMENT_ROOT."/core/lib/admin.lib.php";
-require_once '../lib/einvoicing.lib.php';
-require_once "../class/providers/PDPProviderManager.class.php";
-require_once "../class/protocols/ProtocolManager.class.php";
-require_once "../class/einvoicing.class.php";
+require_once __DIR__.'/../lib/einvoicing.lib.php';
+require_once __DIR__.'/../class/providers/PDPProviderManager.class.php';
+require_once __DIR__.'/../class/protocols/ProtocolManager.class.php';
+require_once __DIR__.'/../class/einvoicing.class.php';
 
 
 // Translations
@@ -187,6 +187,7 @@ if (!getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP')) {
 	$item = $formSetup->newItem('EINVOICING_ENABLE_API_VALIDATION')->setAsYesNo();
 	$item->helpText = $langs->transnoentities('EINVOICING_ENABLE_API_VALIDATION_HELP');
 	$item->defaultFieldValue = '0';
+	//$item->fieldParams['warningifon'] = 1;
 	$item->cssClass = 'minwidth500';
 
 	// Local EN 16931 business rules check (BR, BR-CO, BR-FR subset) on the generated XML.
@@ -271,16 +272,10 @@ if (!getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP')) {
 	$item->defaultFieldValue = '0';
 	$item->cssClass = 'minwidth500';
 
-	// The VAT regime the generated documents declare in BT-8. Left to the VAT mode above by default;
-	// an explicit value is for a seller whose regime that mode cannot express (issue #419).
-	$item = $formSetup->newItem('EINVOICING_VAT_POINT_DATE_CODE')->setAsSelect(array(
-		'auto' => $langs->transnoentities('EINVOICING_VAT_POINT_DATE_CODE_AUTO'),
-		'5'    => $langs->transnoentities('EINVOICING_VAT_POINT_DATE_CODE_5'),
-		'29'   => $langs->transnoentities('EINVOICING_VAT_POINT_DATE_CODE_29'),
-		'72'   => $langs->transnoentities('EINVOICING_VAT_POINT_DATE_CODE_72'),
-	));
-	$item->helpText = $langs->transnoentities('EINVOICING_VAT_POINT_DATE_CODE_HELP');
-	$item->defaultFieldValue = 'auto';
+	// Setup list of POS modules - Do not generate einvoice
+	$item = $formSetup->newItem('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS');
+	$item->helpText = $langs->transnoentities('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS_HELP');
+	$item->defaultFieldValue = getDolGlobalString('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS', 'takepos');
 	$item->cssClass = 'minwidth500';
 
 	// The scheme the party identifier (BT-29, BT-46) is declared under. A list for a French company,
@@ -318,19 +313,35 @@ if (!getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP')) {
 	$item->fieldAttr['min'] = '0';
 	$item->fieldAttr['step'] = '0.1';
 
+	// The three notices below are never sent empty: the generation falls back on the translations the
+	// placeholders show here, so the page states what will be written instead of keeping a silent
+	// default. Shown to a French seller only: their wording states French law, which is a promise the
+	// module has no business putting in the mouth of a seller established anywhere else.
+	$isfrenchseller = ($mysoc->country_code == 'FR');
+	$noticedefaulthelp = $isfrenchseller ? ' '.$langs->transnoentities('EINVOICING_LEGAL_NOTICE_DEFAULT_HELP') : '';
+
 	// Setup conf for PMT - Mention regarding recovery fees
 	$item = $formSetup->newItem('EINVOICING_PMT');
-	$item->helpText = $langs->transnoentities('EINVOICING_PMT_HELP');
+	$item->helpText = $langs->transnoentities('EINVOICING_PMT_HELP').$noticedefaulthelp;
+	if ($isfrenchseller) {
+		$item->fieldAttr['placeholder'] = $langs->transnoentities('RecoveryFeesMention');
+	}
 	$item->cssClass = 'minwidth500';
 
 	// Setup conf for PMD - Mention regarding late payment penalties
 	$item = $formSetup->newItem('EINVOICING_PMD');
-	$item->helpText = $langs->transnoentities('EINVOICING_PMD_HELP');
+	$item->helpText = $langs->transnoentities('EINVOICING_PMD_HELP').$noticedefaulthelp;
+	if ($isfrenchseller) {
+		$item->fieldAttr['placeholder'] = $langs->transnoentities('LatePaymentPenaltiesMention');
+	}
 	$item->cssClass = 'minwidth500';
 
 	// Setup conf for AAB - Mention regarding absence of discount for early payment
 	$item = $formSetup->newItem('EINVOICING_AAB');
-	$item->helpText = $langs->transnoentities('EINVOICING_AAB_HELP');
+	$item->helpText = $langs->transnoentities('EINVOICING_AAB_HELP').$noticedefaulthelp;
+	if ($isfrenchseller) {
+		$item->fieldAttr['placeholder'] = $langs->transnoentities('EarlyPaymentDiscountMention');
+	}
 	$item->cssClass = 'minwidth500';
 
 	/*
@@ -344,12 +355,6 @@ if (!getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP')) {
 	$item->fieldInputOverride = $langs->trans("Mandatory");
 	//$item->enabled = 0;
 	$item->cssClass = 'opacitymedium';
-
-	// Setup conf for PMD - Mention regarding late payment penalties
-	$item = $formSetup->newItem('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS');
-	$item->helpText = $langs->transnoentities('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS_HELP');
-	$item->defaultFieldValue = getDolGlobalString('EINVOICING_NAME_OF_MODULESOURCE_THAT_ARE_POS', 'takepos');
-	$item->cssClass = 'minwidth500';
 
 	/*
 	$itemtitle->helpText = $langs->trans('EINVOICING_VAT_EXIGIBILITY_HELP').' <b>'
@@ -468,7 +473,7 @@ if (!einvoicingIsReceiveDisabled() || !einvoicingIsSendDisabled()) {
 
 	// Setup conf to choose to use Chorus or not
 	$item = $formSetup->newItem('EINVOICING_USE_CHORUS')->setAsYesNo();
-	$item->nameText = $langs->trans("EINVOICING_USE_CHORUS").' <span class="opacitymedium">('.$langs->trans("FeatureNotYetSupported").')</span>';
+	$item->nameText = $langs->trans("EINVOICING_USE_CHORUS").' <span class="opacitymedium">('.$langs->trans("FeatureNotFullyYetSupported").')</span>';
 	$item->helpText = $langs->transnoentities('EINVOICING_USE_CHORUS_HELP');
 	$item->cssClass = 'minwidth500';
 

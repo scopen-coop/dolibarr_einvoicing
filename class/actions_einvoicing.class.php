@@ -130,20 +130,13 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 					if ($invoiceObject->status != $invoiceObject::STATUS_DRAFT	// Never generate/transmit an e-invoice for a DRAFT (note: at validation the invoice has already status VALIDATED when Dolibarr regenerates the final PDF, so the legitimate flow is preserved).
 						&& !getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP')
 						&& getDolGlobalString('EINVOICING_EINVOICE_IN_REAL_TIME')) {
-						// Call function to create Factur-X document
-						require_once __DIR__ . '/protocols/ProtocolManager.class.php';
-
-						$usedProtocols = getDolGlobalString('EINVOICING_PROTOCOL');
-						$ProtocolManager = new ProtocolManager($db);
-						$protocol = $ProtocolManager->getProtocol($usedProtocols);
-
 						$messagecss = '';
 						$message = '';
+
 						// Check configuration
 						$result = $einvoicing->checkRequiredinformations($invoiceObject);
 						if ($result['res'] < 0) {			// Error case
 							$message = $langs->trans("InvoiceNotgeneratedDueToConfigurationIssues") . ': <br>' . $result['message'];
-
 							dol_syslog(__METHOD__ . " " . $message);
 
 							if (getDolGlobalString('EINVOICING_EINVOICE_CANCEL_IF_EINVOICE_FAILS')) {
@@ -167,6 +160,8 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 							//setEventMessages($message, array(), $messagecss);
 						}
 
+						require_once __DIR__ . '/protocols/ProtocolManager.class.php';
+
 						// Recipient directory reachability (opt-in): a recipient that is not routable does not make
 						// the e-invoice document invalid, only undeliverable, so keep generating it and only warn.
 						// The actual transmission is what gets blocked, by the send_to_pdp gate below.
@@ -180,6 +175,12 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 							setEventMessages($warnmsg, array(), 'warnings');
 							$this->warnings[] = $warnmsg;
 						}
+
+
+						// Generate the einvoice
+						$usedProtocols = getDolGlobalString('EINVOICING_PROTOCOL');
+						$ProtocolManager = new ProtocolManager($db);
+						$protocol = $ProtocolManager->getProtocol($usedProtocols);
 
 						$result = $protocol->generateInvoice($invoiceObject, $outputlangs, $pdfPath);		// Generate E-invoice (embed into the real generated file)
 
@@ -242,22 +243,34 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 								}
 							}
 						} else {
+							// What the hook hands back reaches the user only sometimes: up to Dolibarr 22
+							// pdf_sponge copies ->error/->errors and then answers "no error", so the core
+							// reports a success; and $object->warnings is displayed by the "Generate document"
+							// button alone, from 24, never on the validation path. So say it here, except
+							// where the core prints it on its own already: ->errors, from 23 up.
+							if ((float) DOL_VERSION < 23 || !getDolGlobalString('EINVOICING_EINVOICE_CANCEL_IF_EINVOICE_FAILS')) {
+								$failcss = getDolGlobalString('EINVOICING_EINVOICE_CANCEL_IF_EINVOICE_FAILS') ? 'errors' : 'warnings';
+								setEventMessages($langs->trans("EInvoiceNotGenerated"), $protocol->errors, $failcss);
+							}
+
 							if (getDolGlobalString('EINVOICING_EINVOICE_CANCEL_IF_EINVOICE_FAILS')) {
 								// If einvoice fails here, it must be always an error
 								$this->errors = array_merge($this->errors, $protocol->errors);
 								return -1;
 							} else {
 								if ($result < 0) {
-									// A hook can only report a warning where the core carries one back. That chain -
-									// HookManager collecting $actionclassinstance->warnings, the document generator
-									// copying $hookmanager->warnings, and commonGenerateDocument() copying $obj->warnings
-									// onto the object - appears whole in Dolibarr 23 and is absent in 22. Below it the
-									// warning would be reported nowhere, so the failure is raised as an error instead.
-									if ((float) DOL_VERSION < 23) {
-										$this->errors = array_merge($this->errors, $protocol->errors);
+									// Whether the user is told at all is decided by the core: up to 22 pdf_sponge answers
+									// "no error" whatever the hook returned, and $object->warnings is displayed in one
+									// place only, core/actions_builddoc.inc.php, which has it from 24. So up to 23 the
+									// failure is raised as an error - the only channel that reaches the screen there -
+									// with the warnings collected above merged in, so that none of them is dropped.
+									if ((float) DOL_VERSION < 24) {
+										$this->errors = array_merge($this->errors, $this->warnings, $protocol->errors);
 										$this->warnings = array();
 									} else {
-										$this->warnings = array_merge($this->errors, $protocol->errors);	// We want to return the error as a warning.
+										// Append to the warnings already collected above (configuration, routability, auto-send),
+										// which starting the merge from $this->errors used to drop.
+										$this->warnings = array_merge($this->warnings, $protocol->errors);	// We want to return the error as a warning.
 									}
 									return -1;
 								} else {
@@ -394,20 +407,24 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 					}
 				}
 
-				// If the e-invoice is generated but not sent, or if it was sent and a validation error was received,
-				// display the button to regenerate the e-invoice
-				// Re-send is offered for not-yet-transmitted states, plus AWAITING_* as a deliberate retry
-				// affordance. Once REALLY transmitted (persistent flow_id), it is locked by default unless
-				// EINVOICING_ALLOW_RESEND_TRANSMITTED is set ($locked already accounts for that opt-out).
+				// If the e-invoice is generated but not sent, or if it was sent and a validation error was
+				// received, display the button to (re)send the e-invoice.
+				// Re-send is offered for not-yet-transmitted states, plus AWAITING_*/REJECTED as a deliberate
+				// retry/correction affordance. Once REALLY transmitted (persistent flow_id) it is locked, and the
+				// only opt-out is the option EINVOICING_ALLOW_RESEND_TRANSMITTED. That option is read in a single
+				// place, EInvoicing::isTransmittedLockActive() (assigned to $locked above: it returns false as
+				// soon as EINVOICING_ALLOW_RESEND_TRANSMITTED is set), which the server-side send_to_pdp gate
+				// uses too, so the button visibility here and the real enforcement can never drift apart.
 				if (!$locked && !einvoicingIsSendDisabled() && in_array($currentStatusDetails['code'], [
 					$einvoicing::STATUS_GENERATED,
 					$einvoicing::STATUS_ERROR,
 					$einvoicing::STATUS_UNKNOWN,
 					$einvoicing::STATUS_AWAITING_VALIDATION,		// retry affordance (PA will refuse a duplicate)
-					$einvoicing::STATUS_AWAITING_ACK				// retry affordance (PA will refuse a duplicate)
+					$einvoicing::STATUS_AWAITING_ACK,				// retry affordance (PA will refuse a duplicate)
+					$einvoicing::STATUS_REJECTED					// resend after correcting a rejected e-invoice (gated by EINVOICING_ALLOW_RESEND_TRANSMITTED)
 				])) {
 					$resend = false;
-					if (in_array($currentStatusDetails['code'], [$einvoicing::STATUS_AWAITING_VALIDATION, $einvoicing::STATUS_AWAITING_ACK])) {
+					if (in_array($currentStatusDetails['code'], [$einvoicing::STATUS_AWAITING_VALIDATION, $einvoicing::STATUS_AWAITING_ACK, $einvoicing::STATUS_REJECTED])) {
 						$resend = true;
 					}
 					$url_button[] = array(
@@ -703,7 +720,8 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 				&& in_array($currentStatusDetails['code'], [
 					$einvoicing::STATUS_GENERATED,
 					$einvoicing::STATUS_ERROR,
-					$einvoicing::STATUS_UNKNOWN
+					$einvoicing::STATUS_UNKNOWN,
+					$einvoicing::STATUS_REJECTED			// resend a corrected rejected e-invoice (gated by EINVOICING_ALLOW_RESEND_TRANSMITTED)
 				])
 			) {
 				// Same gates and same transmission as the mass action of the invoice list
@@ -796,6 +814,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 
 
 		if ($isSupplierInvoiceContext) {
+			'@phan-var-force FactureFournisseur $object';
 			$permissiontoedit = $user->hasRight('fournisseur', 'facture', 'creer');
 			// Who may validate a supplier invoice is decided by the core, in fourn/facture/card.php
 			// ($usercanvalidate): the "create" right is enough, unless advanced permissions are on, where
@@ -2351,7 +2370,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 	 * Add a link to the read-only XML viewer on the line of the e-invoice file, in the document list
 	 * of an invoice card (issue #687).
 	 *
-	 * The core offers no preview there: dolIsAllowedForPreview() whitelists mime subtypes that hold
+	 * The core offers no preview there: dolIsAllowedForPreview() white-lists mime subtypes that hold
 	 * neither xml nor the Factur-X pdf. This hook runs once per file line, which is where the link goes.
 	 *
 	 * @param array{colspan:int,socid:int|string,id:int|string,modulepart:string,relativepath:string}	$parameters		Array of parameters
@@ -2402,15 +2421,9 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 		// page answers as a full page. The file name keeps the download link the core gives it.
 		$url = dol_buildpath('/einvoicing/xmlpreview.php', 1).'?id='.$invoiceid.$urlparam.'&mode=raw';
 
-		// Same markup as the preview picto of FormFile::showPreview(), so the line reads as a native one
 		$anchorid = 'einvoicingxmlpreview'.$invoiceid;
 		$this->resprints = '<td class="right nowraponall">';
-		$this->resprints .= '<a id="'.$anchorid.'" class="pictopreview documentpreview" href="'.$url.'" mime="text/html"';
-		$this->resprints .= ' data-title="'.dol_escape_htmltag($langs->trans("EInvoiceXmlPreviewTitle")).'"';
-		$this->resprints .= ' target="_blank" rel="noopener noreferrer"';
-		$this->resprints .= ' title="'.dol_escape_htmltag($langs->trans("EInvoicePreviewXml")).'">';
-		$this->resprints .= '<span class="fas fa-search-plus pictofixedwidth" style=" color: #808080;"></span>';
-		$this->resprints .= '</a>';
+		$this->resprints .= $this->einvoiceXmlPreviewAnchor($url, $anchorid);
 
 		// The core closes the cell holding the file name before this hook is executed, so the only place
 		// the hook can write is a cell of its own at the end of the line. The picto belongs next to the
@@ -2436,6 +2449,100 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 			});
 			</script>';
 		$this->resprints .= '</td>';
+
+		return 0;
+	}
+
+	/**
+	 * The preview picto of the XML, with the markup FormFile::showPreview() gives its own.
+	 *
+	 * The 'documentpreview' class is what the core binds (lib_foot.js.php) to its preview dialog: it
+	 * reads href, mime and data-title and frames the answer, so the XML opens where a PDF opens.
+	 * Without javascript the href is simply followed, and the same page answers as a full page.
+	 *
+	 * @param  string $url      Address of the viewer for this invoice
+	 * @param  string $anchorid Identifier of the anchor, so a script can find it again
+	 * @return string           The anchor, ready to print
+	 */
+	private function einvoiceXmlPreviewAnchor($url, $anchorid)
+	{
+		global $langs;
+
+		$out = '<a id="'.$anchorid.'" class="pictopreview documentpreview" href="'.$url.'" mime="text/html"';
+		$out .= ' data-title="'.dol_escape_htmltag($langs->trans("EInvoiceXmlPreviewTitle")).'"';
+		$out .= ' target="_blank" rel="noopener noreferrer"';
+		$out .= ' title="'.dol_escape_htmltag($langs->trans("EInvoicePreviewXml")).'">';
+		$out .= '<span class="fas fa-search-plus pictofixedwidth" style=" color: #808080;"></span>';
+		$out .= '</a>';
+
+		return $out;
+	}
+
+	/**
+	 * Put the same preview picto on the XML of the "Documents" tab, which has no line hook of its own.
+	 *
+	 * That tab is drawn by FormFile::list_of_documents(), whose only hook, showFilesList, replaces the
+	 * whole list instead of completing a line - and returns an int, so it cannot even hand HTML back.
+	 * The picto is therefore placed from the footer, which runs before the core binds
+	 * 'documentpreview' on ready: the anchor is in the DOM by then and is bound like a native one.
+	 *
+	 * @param  array<string,mixed>	$parameters		Array of parameters
+	 * @param  CommonObject|null	$object			The object the page shows
+	 * @param  string				$action			Code action
+	 * @param  HookManager			$hookmanager	Hookmanager
+	 * @return int									0 in all cases, the page is only completed
+	 */
+	public function printCommonFooter($parameters, $object, &$action, $hookmanager)
+	{
+		global $langs, $user;
+
+		$this->resprints = '';
+
+		$contexts = is_array($hookmanager->contextarray) ? $hookmanager->contextarray : array();
+		if (in_array('invoicesuppliercarddocument', $contexts, true)) {
+			if (!$user->hasRight('fournisseur', 'facture', 'lire')) {
+				return 0;
+			}
+			$suffix = '_einvoice.xml';
+			$urlparam = '&element=supplier';
+		} elseif (in_array('invoicedocument', $contexts, true)) {
+			if (!$user->hasRight('facture', 'lire')) {
+				return 0;
+			}
+			$suffix = '_cii.xml';
+			$urlparam = '';
+		} else {
+			return 0;
+		}
+
+		$invoiceid = (is_object($object) && !empty($object->id)) ? (int) $object->id : GETPOSTINT('id');
+		if ($invoiceid <= 0) {
+			return 0;
+		}
+
+		$langs->load("einvoicing@einvoicing");
+
+		$url = dol_buildpath('/einvoicing/xmlpreview.php', 1).'?id='.$invoiceid.$urlparam.'&mode=raw';
+		$anchorid = 'einvoicingxmlpreview'.$invoiceid;
+		$anchor = $this->einvoiceXmlPreviewAnchor($url, $anchorid);
+
+		// Printed, not returned: printCommonFooter() of the core never prints the resPrint of this hook,
+		// it only reads its return value to decide whether to print its own block.
+		// The line is found on the name of the file the module writes, the one the viewer reads back.
+		// Nothing is inserted when that file is not listed, so a tab without an XML is left untouched.
+		print '<script nonce="'.getNonce().'" type="text/javascript">
+			(function() {
+				var links = document.querySelectorAll(\'table a[href*="'.dol_escape_js($suffix).'"]\');
+				if (!links.length || document.getElementById("'.$anchorid.'")) {
+					return;
+				}
+				var name = links[0].parentNode;
+				if (!name) {
+					return;
+				}
+				name.insertAdjacentHTML("beforeend", '.json_encode($anchor).');
+			})();
+			</script>'."\n";
 
 		return 0;
 	}

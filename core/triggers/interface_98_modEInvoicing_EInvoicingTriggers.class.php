@@ -183,27 +183,45 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 			if (!getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP')) {		// If sync Dolibarr to AP is on
 				$einvoicing = new EInvoicing($this->db);
 
-				$result = $einvoicing->fetchLastknownInvoiceStatus($object->id, (string) $object->ref);
+				// The known status and the configuration check are two different answers: keep them in two
+				// variables, the status is still needed after the check to decide what to write.
+				$statusinfo = $einvoicing->fetchLastknownInvoiceStatus($object->id, (string) $object->ref);
 
-				// If $result is $einvoicing::STATUS_IGNORE or STATUS_IGNORE_2, we do nothing.
+				// If $statusinfo is $einvoicing::STATUS_IGNORE or STATUS_IGNORE_2, we do nothing.
 
 				// If einvoice was set to $einvoicing::STATUS_NOT_GENERATED or $einvoicing::STATUS_UNKNOWN, we set it to STATUS_IGNORE (if not qualified for einvoice) or STATUS_NOT_GENERATED (if qualified for einvoice)
-				if ($result['code'] == $einvoicing::STATUS_NOT_GENERATED || $result['code'] == $einvoicing::STATUS_UNKNOWN) {
-					$statustouse = $einvoicing::STATUS_IGNORE;	// default status to use if none of following rules match
+				if ($statusinfo['code'] == $einvoicing::STATUS_NOT_GENERATED || $statusinfo['code'] == $einvoicing::STATUS_UNKNOWN) {
+					if (getDolGlobalString('EINVOICING_EINVOICE_IN_REAL_TIME')) {
+						// Check configuration
+						$checkresult = $einvoicing->checkRequiredinformations($object);
+						if ($checkresult['res'] < 0) {
+							$message = $langs->trans("InvoiceNotgeneratedDueToConfigurationIssues") . ': <br>' . $checkresult['message'];
+							dol_syslog(__METHOD__ . " " . $message);
 
-					// Test if invoice need to be managed by EInvoice
-					$needEinvoice = $einvoicing->needEInvoiceManagement($object);
-					if ($needEinvoice) {
-						$statustouse = $needEinvoice;
+							if (getDolGlobalString('EINVOICING_EINVOICE_CANCEL_IF_EINVOICE_FAILS')) {
+								$error++;
+								$this->errors[] = $checkresult['message'];
+								return -1;		// This should generate a rollback
+							}
+						}
 					}
 
-					$newobject = dol_clone($object, 2);
-					$newobject->ref = (string) $object->newref;
+					// Test if invoice need to be managed by EInvoice and set the new status to use
+					if ($statusinfo['code'] == $einvoicing::STATUS_UNKNOWN) {
+						$statustouse = $einvoicing::STATUS_IGNORE;	// default status to use if none of following rules match
+						$needEinvoice = $einvoicing->needEInvoiceManagement($object);
+						if ($needEinvoice) {
+							$statustouse = $needEinvoice;
+						}
 
-					$result = $einvoicing->setEInvoiceStatus($newobject, $statustouse, '');
-					if ($result < 0) {
-						$this->errors = array_merge($this->errors, $einvoicing->errors);
-						return -1;
+						$newobject = dol_clone($object, 2);
+						$newobject->ref = (string) $object->newref;
+
+						$result = $einvoicing->setEInvoiceStatus($newobject, $statustouse, '');
+						if ($result < 0) {
+							$this->errors = array_merge($this->errors, $einvoicing->errors);
+							return -1;
+						}
 					}
 				}
 			}
@@ -320,6 +338,35 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 					foreach ($resTotals['errors'] as $errorMsg) {
 						$this->errors[] = '- ' . $errorMsg;
 					}
+					return -1;
+				}
+			}
+
+			// An invoice the import could not make total what its document announces never becomes
+			// payable by being validated: the totals are confronted again here, so an invoice corrected
+			// to the figures the vendor bills validates normally and drops the mark (issue #861).
+			$announced = SupplierInvoiceHelper::totalsMismatch((int) $object->id);
+			if ($announced !== null) {
+				// A prepaid amount is in the mark only for a document referencing the invoice it was paid on (BG-3).
+				if (SupplierInvoiceHelper::totalsAgreeWithDocument($object, $announced['tva'], $announced['ttc'], $announced['prepaid'] ?? null)) {
+					SupplierInvoiceHelper::clearTotalsMismatch((int) $object->id);
+				} elseif (isset($announced['prepaid'])
+					&& SupplierInvoiceHelper::totalsAgreeWithDocument($object, $announced['tva'], $announced['ttc'])) {
+					// Totals right, deduction missing: saying the invoice does not total the document
+					// would send the operator looking at figures that do match. Name what is missing.
+					$this->errors[] = $langs->trans(
+						'EInvoicePrepaidMismatchBlocksValidation',
+						price2num($announced['prepaid'], 'MT'),
+						price2num(SupplierInvoiceHelper::linkedDepositAmount((int) $object->id), 'MT')
+					);
+					return -1;
+				} else {
+					$this->errors[] = $langs->trans(
+						'EInvoiceTotalsMismatchBlocksValidation',
+						price2num($announced['ttc'], 'MT'),
+						price2num($announced['tva'], 'MT'),
+						price2num(abs((float) $object->total_ttc), 'MT')
+					);
 					return -1;
 				}
 			}

@@ -667,6 +667,12 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 
 
 		if ($response['status_code'] == 200 || $response['status_code'] == 202) {
+			if (!is_array($response['response']) || empty($response['response']['flowId'])) {
+				// Accepted, but the answer is not the JSON body the platform announces. Everything below
+				// is built on that flow id, so stop here rather than call 'flows/' with nothing.
+				$this->errors[] = "Sample invoice sent but the platform returned no flow id.";
+				return 0;
+			}
 			$flowId = $response['response']['flowId'];
 			$outputLog[] = "Sample invoice sent successfully.";
 
@@ -1219,7 +1225,7 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 	 *
 	 * @param string 		$flowId        	FlowId
 	 * @param string|null 	$call_id  		Call ID for logging purposes
-	 * @return array{res:int<-1,1>, message:string, postponeflow?:int, actioncode?:string|null, actionurl?:string|null, action?:string|null, actiondata?:array<string,mixed>|null, businessmessage?:string} Returns array with 'res' (1 on success, 0 if exists or already processed, -1 on failure) with a 'message' and for business errors an optional 'actioncode', 'actionurl' and 'action'. 'postponeflow' marks a failure that stored nothing, so the batch may go on and the flow be retried later.
+	 * @return array{res:int<-1,1>, message:string, postponeflow?:int, actioncode?:string|null, actionurl?:string|null, action?:string|null, actiondata?:array<string,mixed>, businessmessage?:string} Returns array with 'res' (1 on success, 0 if exists or already processed, -1 on failure) with a 'message' and for business errors an optional 'actioncode', 'actionurl' and 'action'. 'postponeflow' marks a failure that stored nothing, so the batch may go on and the flow be retried later.
 	 */
 	public function syncFlow($flowId, $call_id = null)
 	{
@@ -1404,7 +1410,12 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 						$retarray['actioncode'] = $res['actioncode'] ?? null;
 						$retarray['actionurl'] = $res['actionurl'] ?? null;
 						$retarray['action'] = $res['action'] ?? null;
-						$retarray['actiondata'] = $res['actiondata'] ?? null;
+						// Set only when the import sent one, the way postponeflow and businessmessage are just
+						// below: the key is declared optional, and carrying it at null instead hands every caller
+						// a null to index into.
+						if (isset($res['actiondata'])) {
+							$retarray['actiondata'] = $res['actiondata'];
+						}
 						// A failure that stored nothing may be retried later: the flag and the message that
 						// goes with it have to reach syncFlows(), which is what decides to carry on. Both are
 						// set only when the import sent them, so the shape stays the one declared above.
@@ -1687,6 +1698,11 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 				if ($document->flow_direction == 'In') {
 					$resIncoming = $this->processIncomingSupplierInvoiceStatus($flowId, $document, $einvoicing);
 
+					if ($resIncoming['res'] < 0) {
+						// Left unrecorded on purpose: a stored flow is treated as known and never retried.
+						return $resIncoming;
+					}
+
 					$returnRes = $resIncoming['res'];
 					$returnMessage = $resIncoming['message'];
 					break;
@@ -1707,6 +1723,17 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 					} else {
 						$document->fk_element_id = !empty($supplierInvoiceObj->id) ? $supplierInvoiceObj->id : 0;
 						$document->tracking_idref = !empty($supplierInvoiceObj->ref) ? $supplierInvoiceObj->ref : '(NOTFOUND)'; // Should always be found here
+					}
+
+					// The status we sent is the one recorded when the message left, so the flow row can carry
+					// it like an incoming one does. Without it the list and the card show a lifecycle line
+					// with an empty code, and the two directions cannot be read the same way.
+					if (!empty($resFetchStatusMessages['lc_status'])) {
+						$document->cdar_lifecycle_code = (string) $resFetchStatusMessages['lc_status'];
+						$document->cdar_lifecycle_label = $einvoicing->getStatusLabel($resFetchStatusMessages['lc_status']);
+					}
+					if (empty($document->cdar_reason_code) && !empty($resFetchStatusMessages['lc_reason_code'])) {
+						$document->cdar_reason_code = $resFetchStatusMessages['lc_reason_code'];
 					}
 
 					// Update LC message status in einvoicing_lifecycle_msg table based on validation response
