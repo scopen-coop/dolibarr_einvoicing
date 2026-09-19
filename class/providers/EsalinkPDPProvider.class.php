@@ -178,11 +178,13 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 		$item->fieldAttr['autocomplete'] = "new-password";
 		$item->nameText = $langs->transnoentities('EINVOICING_CLIENT_SECRET');
 		$item->cssClass = 'minwidth500';
+		$this->storeThisFieldEncrypted($item);
 
 		// API_KEY
 		$item = $formSetup->newItem($prefix . 'API_KEY'.(getDolGlobalInt('EINVOICING_LIVE') ? '_PROD' : ''));
 		$item->nameText = $langs->transnoentities('EINVOICING_API_KEY');
 		$item->cssClass = 'minwidth500';
+		$this->storeThisFieldEncrypted($item);
 
 		// Token
 		if (getDolGlobalString($prefix . 'API_KEY'.(getDolGlobalInt('EINVOICING_LIVE') ? '_PROD' : ''))) {
@@ -1599,6 +1601,11 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 								$syncStatus = $einvoicing::STATUS_ERROR;
 								$syncComment = $document->ack_info;
 							}
+							// 0 keeps the status the invoice already carries: a duplicate rejection refuses the
+							// new delivery, not the invoice the platform holds and quotes (issue #985).
+							if ($einvoicing->isTransmissionOnlyRejection($factureObj->id, $factureObj->element, $syncStatus, $document->cdar_reason_code)) {
+								$syncStatus = 0;
+							}
 							$einvoicing->insertOrUpdateExtLink($factureObj->id, $factureObj->element, $flowId, $syncStatus, $factureObj->ref, $syncComment);
 
 							$einvoicing->storeStatusMessage($document->fk_element_id, $document->fk_element_type, $document->cdar_lifecycle_code, $syncComment, $document->flow_direction, $flowId, $syncValidationStatus, $syncValidationComment, $document->submittedat, $document->cdar_reason_code, $recipientRoles);
@@ -1881,7 +1888,7 @@ class EsalinkPDPProvider extends AbstractPDPProvider
 	 * @param mixed $object Invoice object (CustomerInvoice or SupplierInvoice)
 	 * @param int $statusCode   Status code to send (see class constants for available codes)
 	 * @param string $reasonCode Reason code to send (optional)
-	 * @param array{amount?:float,breakdown?:array<array{vatrate:float,amount:float}>} $paymentData Cashed amount (TTC) for status 212 (Encaissee), mandatory content of the CDAR (rule BR-FR-CDV-14)
+	 * @param array{amount?:float,breakdown?:array<array{vatrate:float,amount:float}>,reason?:string} $paymentData Amount (TTC) moved for status 212 (Encaissee), negative on a refund, with the reason of the cancellation (rules BR-FR-CDV-14, P1.17)
 	 *
 	 * @return array{res:int, message:string}       Returns array with 'res' (1 on success, -1 on failure) with a 'message'.
 	 */

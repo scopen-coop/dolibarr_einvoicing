@@ -517,7 +517,7 @@ class CIIProtocol extends AbstractProtocol
 		$filedir = getMultidirOutputCompat($invoice, '', 1, 'temp');    // Example '/mydolibarr/documents/facture/temp/FAYYMM-XXXX'
 		$xmlfile = $filedir . '/' . $filename . '/' .  static::GENERATED_INVOICE_XML_FILE_NAME;
 
-		dol_mkdir(dirname($xmlfile));
+		dol_mkdir(dirname($xmlfile), einvoicingDataRoot(dirname($xmlfile)));
 		dol_delete_file($xmlfile);
 
 		$xmlcontent = $this->buildXML($invoiceData, $linesData, $this->getBuildXmlProfile($object), $outputlangs);
@@ -686,7 +686,7 @@ class CIIProtocol extends AbstractProtocol
 
 		$tempDir = $conf->einvoicing->dir_temp;
 		if (!dol_is_dir($tempDir)) {
-			dol_mkdir($tempDir);
+			dol_mkdir($tempDir, einvoicingDataRoot($tempDir));
 		}
 
 		// Use a unique per-call working file so two concurrent syncs cannot overwrite each other and
@@ -1668,31 +1668,6 @@ class CIIProtocol extends AbstractProtocol
 		$node = $nodes->item(0);
 		$value = trim($node->nodeValue);
 		return $value !== '' ? $value : null;
-	}
-
-	/**
-	 * Extract all matching nodes as an array of their text values.
-	 *
-	 * @param \DOMXPath			$xpath			XPath
-	 * @param string			$expr			XPath expression or 'NA'
-	 * @param \DOMNode|null		$contextNode	Optional context node for relative XPath queries
-	 * @return string[]
-	 */
-	private function getXPathValues($xpath, $expr, $contextNode = null)
-	{
-		if ($expr === 'NA' || empty($expr))
-			return [];
-
-		$nodes = $xpath->query($expr, $contextNode);
-		$result = [];
-		if ($nodes) {
-			foreach ($nodes as $node) {
-				$v = trim($node->nodeValue);
-				if ($v !== '')
-					$result[] = $v;
-			}
-		}
-		return $result;
 	}
 
 	/**
@@ -3602,7 +3577,7 @@ class CIIProtocol extends AbstractProtocol
 		}
 
 		if (!file_exists($upload_dir)) {
-			if (!dol_mkdir($upload_dir)) {
+			if (!dol_mkdir($upload_dir, einvoicingDataRoot($upload_dir))) {
 				dol_syslog(__METHOD__ . " Failed to create upload directory: $upload_dir", LOG_ERR);
 				return array('res' => -1, 'message' => 'Failed to create upload directory');
 			}
@@ -3770,8 +3745,8 @@ class CIIProtocol extends AbstractProtocol
 	/**
 	 * Resolve multiple line allowances into a single percentage for Dolibarr.
 	 *
-	 * Dolibarr only supports percentage discounts on lines, so BT-136 has to be turned into one. Its base is BT-137
-	 * when the issuer sends it, otherwise it is rebuilt from BT-131 with the allowances added back and the charges
+	 * Dolibarr only supports percentage discounts on lines, so BT-136 has to be turned into one. Its base is the
+	 * amount of the line before its allowances, rebuilt from BT-131 with the allowances added back and the charges
 	 * taken out (issues #735 and #783). BT-136 is read as a magnitude, ram:ChargeIndicator saying which way it goes.
 	 *
 	 * Multiple allowances are summed into one final percentage.
@@ -3816,9 +3791,12 @@ class CIIProtocol extends AbstractProtocol
 		// price of the Dolibarr line.
 		$priceWithoutDiscount = (float) $lineTotalAmount - $totalChargeAmount + $totalDiscountAmount;
 
-		// Base for the percent — BT-137 if given, amount before discount otherwise (issue #783).
-		// A BasisAmount of 0 (some pivots emit it) counts as not given: ?? would keep the 0 and drop the discount.
-		$base = !empty($allowances[0]['basisAmount']) ? $allowances[0]['basisAmount'] : $priceWithoutDiscount;
+		// Base for the percent — the amount of the line before its allowances, never BT-137. Dolibarr applies
+		// remise_percent to quantity times unit price, which is that amount: a BT-137 stating anything else (a
+		// per-unit base, a base covering part of the line, the base of the first of several allowances) yields a
+		// percentage of something the line does not hold. BT-137 is the base of BT-138, and no rule of EN 16931
+		// ties it to BT-131 or to BT-129 x BT-146.
+		$base = $priceWithoutDiscount;
 
 		if (!$base) {
 			return false;
