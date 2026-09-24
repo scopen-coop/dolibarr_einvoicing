@@ -1129,12 +1129,30 @@ trait CommonProtocol
 			// Creating the thirdparty needs the right on it. Without that right the button stays where it is,
 			// greyed and titled: a button that disappears reads as "create it, but how?", a greyed one names
 			// the permission to ask for.
-			$action = $langs->trans('CreateSupplierManually');
+			$action = '<div class="marginbottomonly opacitymedium">'.$langs->trans('CreateSupplierManually');
+			$action .= ' '.$langs->trans('OrAssignProfessionalIdToExistingSupplier').'</div>';
+
 			$action .= $user->hasRight('societe', 'creer')
-				? '<a class="butAction small smallpaddingimp" href="' . dol_escape_htmltag($createUrl) . '" target="_blank">'
+				? '<a class="butAction small smallpaddingimp nomarginleft" href="' . dol_escape_htmltag($createUrl) . '" target="_blank">'
 				: '<a class="butActionRefused classfortooltip small smallpaddingimp" href="#" title="' . dol_escape_htmltag($langs->trans("NotEnoughPermissions")) . '">';
 			$action .= '<i class="fas fa-plus-circle"></i> ';
 			$action .= $langs->trans('CreateSupplier');
+			$action .= '</a>';
+
+			// The seller may already exist as a thirdparty under another identity: the professional
+			// identifier of the document can be set on it by hand, and the suppliers list is where to look for it.
+			$searchUrl = DOL_URL_ROOT . '/societe/list.php?type=f';
+			$searchUrl .= '&backtopage=' . urlencode(dol_buildpath('/einvoicing/document_list.php', 1));
+
+			$action .= ' ';
+
+			// Reading the list needs the right on it, and the same reasoning as for the creation
+			// button above applies: a greyed button names the permission to ask for.
+			$action .= $user->hasRight('societe', 'lire')
+				? '<a class="butAction small smallpaddingimp" href="' . dol_escape_htmltag($searchUrl) . '" target="_blank">'
+				: '<a class="butActionRefused classfortooltip small smallpaddingimp" href="#" title="' . dol_escape_htmltag($langs->trans("NotEnoughPermissions")) . '">';
+			$action .= '<i class="fas fa-search"></i> ';
+			$action .= $langs->trans('SearchAmongSuppliers');
 			$action .= '</a>';
 
 			return array(

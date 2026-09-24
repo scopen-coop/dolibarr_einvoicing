@@ -2436,6 +2436,9 @@ class EInvoicing
 		if (empty($conf->use_javascript_ajax)) {
 			$expand_display = true;		// We force group to be shown expanded
 		}
+		if (GETPOST('highlight')) {
+			$expand_display = true;		// We force group to be shown expanded
+		}
 
 		$resprints .= '<!-- thirdpartyCardBlockfor objec->element = ' . $object->element . ' -->
         <script nonce="" type="text/javascript">
@@ -2647,6 +2650,14 @@ class EInvoicing
 			$resprints .= '<td'.(empty($parameters['colspanvalue']) ? '' : ' colspan="'.(((int) $parameters['colspanvalue']) - 1).'"').'>';
 			if ($mode == 'edit') {
 				$resprints .= $this->selectVendorProduct($form, $object->id, $product_id, 'routing_product_id');
+
+				if (GETPOST('highlight') == 'routing_product_id') {
+					if (getDolGlobalString('PRODUIT_USE_SEARCH_TO_SELECT')) {
+						$resprints .= dol_set_focus('#search_routing_product_id');
+					} else {
+						$resprints .= dol_set_focus('#routing_product_id');
+					}
+				}
 			} else {
 				if ($product_id != '' && $product_id != '-1') {
 					if (preg_match('/^idprod/', $product_id)) {
