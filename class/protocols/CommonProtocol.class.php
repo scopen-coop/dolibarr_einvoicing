@@ -367,7 +367,7 @@ trait CommonProtocol
 	{
 		global $conf, $langs, $mysoc;
 
-		dol_mkdir($conf->einvoicing->dir_temp);
+		dol_mkdir($conf->einvoicing->dir_temp, einvoicingDataRoot($conf->einvoicing->dir_temp));
 
 		$outputlangs = $langs;		// TODO Use the target language
 
@@ -803,7 +803,7 @@ trait CommonProtocol
 					}
 					$thirdparty->zip = $sellerInfo['sellerpostcode'] ?? $thirdparty->zip;
 					$thirdparty->town = $sellerInfo['sellercity'] ?? $thirdparty->town;
-					$thirdparty->country_code = $sellerInfo['sellercountry'] ?? $thirdparty->country_code;
+					$this->_setThirdpartyCountryFromCode($thirdparty, $sellerInfo['sellercountry'] ?? '');
 					$thirdparty->email = $sellerInfo['sellercontactemailaddr'] ?? $thirdparty->email;
 					if ($sellerPhone !== '') {
 						$thirdparty->phone = $sellerPhone;
@@ -847,8 +847,8 @@ trait CommonProtocol
 					if (empty($thirdparty->town) && !empty($sellerInfo['sellercity'])) {
 						$thirdparty->town = $sellerInfo['sellercity'];
 					}
-					if (empty($thirdparty->country_code) && !empty($sellerInfo['sellercountry'])) {
-						$thirdparty->country_code = $sellerInfo['sellercountry'];
+					if (empty($thirdparty->country_id) && !empty($sellerInfo['sellercountry'])) {
+						$this->_setThirdpartyCountryFromCode($thirdparty, $sellerInfo['sellercountry']);
 					}
 					if (empty($thirdparty->email) && !empty($sellerInfo['sellercontactemailaddr'])) {
 						$thirdparty->email = $sellerInfo['sellercontactemailaddr'];
@@ -878,18 +878,31 @@ trait CommonProtocol
 			}
 			$allowmodcodeclient = 0;
 			$allowmodcodefournisseur = 0;
-			$this->_prepareThirdpartyForImportUpdate($thirdparty, $allowmodcodeclient, $allowmodcodefournisseur);
+			$tosave = $this->_prepareThirdpartyForImportUpdate($thirdparty, $allowmodcodeclient, $allowmodcodefournisseur);
+			// The vendor is identified and the import has nothing to write on it: saving it anyway would only
+			// let a setup rule it does not meet (mandatory professional id, code mask...) refuse the document.
+			if (!$tosave && !getDolGlobalInt('EINVOICING_THIRDPARTIES_COMPLETE_INFO')) {
+				dol_syslog(get_class($this) . '::_syncOrCreateThirdpartyFromEInvoiceSeller Nothing to update on thirdparty: ' . $thirdpartyId);
+				return array(
+					'res' => $thirdpartyId,
+					'message' => 'Thirdparty ' . $thirdparty->name . ' found, nothing to update.' . ($nameMismatchWarning !== '' ? ' - ' . $nameMismatchWarning : '')
+				);
+			}
 
 			$result = $thirdparty->update(0, $user, 1, $allowmodcodeclient, $allowmodcodefournisseur);
+
+			// update() answers -3 to every refusal of verify() (code out of the numbering mask, mandatory or
+			// duplicate professional id...): only the error it recorded tells a supplier code used twice.
+			$duplicateSupplierCode = ($result == -3 && in_array('ErrorSupplierCodeAlreadyUsed', $thirdparty->errors));
 
 			// Copying into the thirdparty what the document says is a convenience (option
 			// EINVOICING_THIRDPARTIES_COMPLETE_INFO), and the vendor is already identified at this point:
 			// a value it refuses - a phone number carrying a sentence, a name longer than the column, a
 			// trigger of another module - must not cost the invoice. Save the thirdparty again without
 			// that completion: the document is then imported, and the caller is told what was left out.
-			// The duplicate supplier code (-3) is not about the completion and keeps its own answer below.
+			// The duplicate supplier code is not about the completion and keeps its own answer below.
 			$completionWarning = '';
-			if ($result < 0 && $result != -3 && getDolGlobalInt('EINVOICING_THIRDPARTIES_COMPLETE_INFO')) {
+			if ($result < 0 && !$duplicateSupplierCode && getDolGlobalInt('EINVOICING_THIRDPARTIES_COMPLETE_INFO')) {
 				$completionError = implode(', ', array_filter(array_merge(array($thirdparty->error), $thirdparty->errors)));
 
 				$plainthirdparty = new Societe($db);
@@ -918,7 +931,7 @@ trait CommonProtocol
 				$this->error = $thirdparty->error;
 				$this->errors = $thirdparty->errors;
 
-				if ($result == -3) {	// In this case we also have one entry in $this->errors = 'ErrorSupplierCodeAlreadyUsed'
+				if ($duplicateSupplierCode) {
 					// Case of duplicate supplier code, need to change one.
 					dol_syslog(get_class($this) . '::_syncOrCreateThirdpartyFromEInvoiceSeller Error updating thirdparty: There is 2+ suppliers with the same supplier code. You msut fix one', LOG_DEBUG);
 
@@ -941,10 +954,12 @@ trait CommonProtocol
 						'actiondata' => array('suppliercode' => $thirdparty->code_fournisseur)
 					);
 				} else {
-					dol_syslog(get_class($this) . '::_syncOrCreateThirdpartyFromEInvoiceSeller Error updating thirdparty: ' . implode(',', array_merge(array($thirdparty->error), $thirdparty->errors)), LOG_ERR);
+					// Name the thirdparty: the user has to open it to fix what the core refuses.
+					$updateError = implode(', ', array_unique(array_filter(array_merge(array($thirdparty->error), $thirdparty->errors))));
+					dol_syslog(get_class($this) . '::_syncOrCreateThirdpartyFromEInvoiceSeller Error updating thirdparty ' . $thirdpartyId . ': ' . $updateError, LOG_ERR);
 					return array(
 						'res' => -1,
-						'message' => 'Thirdparty update error: ' . dol_escape_htmltag(implode(',', array_merge(array($thirdparty->error), $thirdparty->errors))).'.'
+						'message' => 'Thirdparty update error on ' . dol_escape_htmltag($thirdparty->name) . ' (id ' . ((int) $thirdpartyId) . '): ' . dol_escape_htmltag($updateError) . '.'
 					);
 				}
 			} else {
@@ -972,7 +987,7 @@ trait CommonProtocol
 			}
 			$thirdparty->zip = $sellerInfo['sellerpostcode'] ?? '';
 			$thirdparty->town = $sellerInfo['sellercity'] ?? '';
-			$thirdparty->country_code = $sellerInfo['sellercountry'] ?? '';
+			$this->_setThirdpartyCountryFromCode($thirdparty, $sellerInfo['sellercountry'] ?? '');
 			$thirdparty->email = $sellerInfo['sellercontactemailaddr'] ?? '';
 			$thirdparty->phone = $sellerPhone;
 			$thirdparty->fax = $sellerFax;
@@ -1060,7 +1075,7 @@ trait CommonProtocol
 				$createParams['town'] = $sellertown;
 			}
 			if (!empty($sellercountrycode)) {
-				$countryid = dol_getIdFromCode($this->db, $sellercountrycode, 'c_country');
+				$countryid = dol_getIdFromCode($this->db, $sellercountrycode, 'c_country', 'code', 'rowid');
 				if ($countryid > 0) {
 					$createParams['country_id'] = $countryid;
 				}
@@ -1111,10 +1126,33 @@ trait CommonProtocol
 			$message = $langs->trans("FailedToFindSupplier"). ' ' . $detailsStr . ". \n";
 			$message .= $langs->trans("AutoCreateThirdPartyOffCreateItManually");
 
-			$action = $langs->trans('CreateSupplierManually');
-			$action .= '<a class="butAction small smallpaddingimp" href="' . dol_escape_htmltag($createUrl) . '" target="_blank">';
+			// Creating the thirdparty needs the right on it. Without that right the button stays where it is,
+			// greyed and titled: a button that disappears reads as "create it, but how?", a greyed one names
+			// the permission to ask for.
+			$action = '<div class="marginbottomonly opacitymedium">'.$langs->trans('CreateSupplierManually');
+			$action .= ' '.$langs->trans('OrAssignProfessionalIdToExistingSupplier').'</div>';
+
+			$action .= $user->hasRight('societe', 'creer')
+				? '<a class="butAction small smallpaddingimp nomarginleft" href="' . dol_escape_htmltag($createUrl) . '" target="_blank">'
+				: '<a class="butActionRefused classfortooltip small smallpaddingimp" href="#" title="' . dol_escape_htmltag($langs->trans("NotEnoughPermissions")) . '">';
 			$action .= '<i class="fas fa-plus-circle"></i> ';
 			$action .= $langs->trans('CreateSupplier');
+			$action .= '</a>';
+
+			// The seller may already exist as a thirdparty under another identity: the professional
+			// identifier of the document can be set on it by hand, and the suppliers list is where to look for it.
+			$searchUrl = DOL_URL_ROOT . '/societe/list.php?type=f';
+			$searchUrl .= '&backtopage=' . urlencode(dol_buildpath('/einvoicing/document_list.php', 1));
+
+			$action .= ' ';
+
+			// Reading the list needs the right on it, and the same reasoning as for the creation
+			// button above applies: a greyed button names the permission to ask for.
+			$action .= $user->hasRight('societe', 'lire')
+				? '<a class="butAction small smallpaddingimp" href="' . dol_escape_htmltag($searchUrl) . '" target="_blank">'
+				: '<a class="butActionRefused classfortooltip small smallpaddingimp" href="#" title="' . dol_escape_htmltag($langs->trans("NotEnoughPermissions")) . '">';
+			$action .= '<i class="fas fa-search"></i> ';
+			$action .= $langs->trans('SearchAmongSuppliers');
 			$action .= '</a>';
 
 			return array(
@@ -1125,6 +1163,33 @@ trait CommonProtocol
 				'action' => $action,
 				'actiondata' => $actiondata
 			);
+		}
+	}
+
+	/**
+	 * Set the country of a thirdparty from the country code carried by a received document.
+	 *
+	 * The stored country is fk_pays, which the core writes from country_id: up to Dolibarr 19,
+	 * Societe::update() never derives it from country_code, so a thirdparty created by the import
+	 * silently ended up with no country at all (issue #1037). An unknown code is left out.
+	 *
+	 * @param	Societe		$thirdparty		Thirdparty to set the country on
+	 * @param	string		$countrycode	Country code read in the document (BT-40, BT-55...)
+	 * @return	void
+	 */
+	private function _setThirdpartyCountryFromCode($thirdparty, $countrycode)
+	{
+		$countrycode = trim((string) $countrycode);
+		if ($countrycode === '') {
+			return;
+		}
+
+		$countryid = dol_getIdFromCode($this->db, $countrycode, 'c_country', 'code', 'rowid');
+		if ($countryid > 0) {
+			$thirdparty->country_id = $countryid;
+			$thirdparty->country_code = $countrycode;
+		} else {
+			dol_syslog(get_class($this) . '::_setThirdpartyCountryFromCode Unknown country code in document: ' . $countrycode, LOG_WARNING);
 		}
 	}
 
@@ -1140,23 +1205,28 @@ trait CommonProtocol
 	 * @param	Societe	$thirdparty					Thirdparty to save, already loaded
 	 * @param	int		$allowmodcodeclient			Set to 1 when a customer code has to be generated
 	 * @param	int		$allowmodcodefournisseur	Set to 1 when a vendor code has to be generated
-	 * @return	void
+	 * @return	int									1 if there is something to save on the thirdparty, 0 if not
 	 */
 	private function _prepareThirdpartyForImportUpdate($thirdparty, &$allowmodcodeclient, &$allowmodcodefournisseur)
 	{
+		$tosave = 0;
+
 		// Flag the thirdparty as a vendor if it is not one yet
 		// (ex: a prospect or customer receiving its first supplier invoice).
 		if (!$thirdparty->fournisseur) {
 			$thirdparty->fournisseur = 1;
+			$tosave = 1;
 		}
 
 		if (empty($thirdparty->code_fournisseur) && $thirdparty->codefournisseur_modifiable()) {
 			$thirdparty->code_fournisseur = 'auto';
 			$allowmodcodefournisseur = 1;
+			$tosave = 1;
 		}
 		if (!empty($thirdparty->client) && empty($thirdparty->code_client) && $thirdparty->codeclient_modifiable()) {
 			$thirdparty->code_client = 'auto';
 			$allowmodcodeclient = 1;
+			$tosave = 1;
 		}
 
 		// This function never sets an extrafield on a thirdparty, so it must not rewrite them, and it has
@@ -1165,6 +1235,8 @@ trait CommonProtocol
 		// the WHOLE update as soon as one of those fields is mandatory and empty. Emptied, array_options
 		// makes insertExtraFields() return 0 without touching the stored row.
 		$thirdparty->array_options = array();
+
+		return $tosave;
 	}
 
 	/**
@@ -1578,9 +1650,14 @@ trait CommonProtocol
 			}
 
 			// Third choice: set a default product on the vendor thirdparty (used for future imports when no product is found)
+			// The field lives on the thirdparty card, so this one takes the right to edit it. Greyed without it,
+			// like the button above. "disabled" and not "buttonRefused": the eldy theme dropped the rule for
+			// that class in Dolibarr 24, which would leave the button looking enabled there.
 			if (!empty($vendorId)) {
 				$thirdpartyUrl = dol_buildpath('/societe/card.php', 1) . '?socid=' . ((int) $vendorId) . '&action=edit&highlight=routing_product_id#treinvoicing';
-				$action .= '<a class="button small smallpaddingimp" style="' . $btnStyle . '" href="' . dol_escape_htmltag($thirdpartyUrl) . '" target="_blank">';
+				$action .= $user->hasRight('societe', 'creer')
+					? '<a class="button small smallpaddingimp" style="' . $btnStyle . '" href="' . dol_escape_htmltag($thirdpartyUrl) . '" target="_blank">'
+					: '<a class="button disabled classfortooltip small smallpaddingimp" style="' . $btnStyle . '" href="#" title="' . dol_escape_htmltag($langs->trans("NotEnoughPermissions")) . '">';
 				$action .= '<i class="fas fa-star"></i> ';
 				$action .= $langs->trans('SetDefaultProductForThirdparty');
 				$action .= '</a>';
@@ -2491,15 +2568,24 @@ trait CommonProtocol
 	private static $UNTDID4461_TO_DOLIBARR_PAIEMENT_CODE = [
 		'10' => 'LIQ',	// Cash
 		'20' => 'CHQ',	// Check
+		'21' => 'CHQ',	// Banker's draft
+		'22' => 'CHQ',	// Certified banker's draft
 		'23' => 'TRA',	// Banque check
 		'24' => 'TRA',	// Bill of exchange awaiting acceptance
+		'25' => 'CHQ',	// Certified cheque
+		'26' => 'CHQ',	// Local cheque
 		'30' => 'VIR',	// Bank transfer
+		'31' => 'VIR',	// Debit transfer, a transfer within a giro system network
+		'42' => 'VIR',	// Payment to bank account
 		'45' => 'TIP',	// Referenced home-banking credit transfer
 		'48' => 'CB',	// Bank card, the generic code most senders use rather than 54
 		'49' => 'PRE',	// Direct debit, the generic code most senders use rather than 59
 		'54' => 'CB',	// Credit card
+		'55' => 'CB',	// Debit card, the dictionary of Dolibarr has one code for both cards
+		'58' => 'VIR',	// SEPA credit transfer, which BR-49/BR-50 put on a par with 30
 		'59' => 'PRE',	// SEPA direct debit
 		'68' => 'VAD',	// Online payment
+		'70' => 'LCR',	// Bill drawn by the creditor on the debtor, the French LCR
 		'1' => 'FAC',	// local payment method | not defined
 	];
 

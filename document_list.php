@@ -855,6 +855,7 @@ if ($diagFileName) {
 	$last_supplier_invoice_error .= '<i class="fas fa-info-circle em088 opacityhigh classfortooltip" title="'. $langs->trans("LastSupplierInvoiceCouldNotBeProcessedInfo") .'"></i>';
 	$last_supplier_invoice_error .= ' : </span>';
 	$last_supplier_invoice_error .= '<a href="'.$urlConvertedFile.'" target="_blank">' . $langs->trans("DocDownloadConverted") . ' ' . img_picto('', 'download', 'class="pictofixedwidth"') . '</a>';
+	$last_supplier_invoice_error .= einvoicingDiagnosticPreviewLink($diagFileName);
 
 	// The readable view is only stored when the platform provided one with the flow
 	if (file_exists($conf->einvoicing->dir_temp . '/' . $diagReadableFileName)) {
@@ -862,6 +863,7 @@ if ($diagFileName) {
 
 		$last_supplier_invoice_error .= ' <span class="opacitylow">|</span> ';
 		$last_supplier_invoice_error .= '<a href="'.$urlReadableFile.'" target="_blank">' . $langs->trans("DocDownloadReadable") . ' ' . img_picto('', 'download', 'class="pictofixedwidth"') . '</a>';
+		$last_supplier_invoice_error .= einvoicingDiagnosticPreviewLink($diagReadableFileName);
 	}
 }
 
@@ -1109,7 +1111,7 @@ if ($action == 'confirm_sync' && getDolGlobalString('EINVOICING_PDP') && $confir
 // deleting the draft supplier invoice a reception created: the flow is still here, so re-running a
 // synchronization or deleting the line looks like the way to get the document back, and neither is.
 // The action is on the flow card, one click away but invisible from here, hence this reminder.
-if ($provider && !einvoicingIsReceiveDisabled()) {
+if ($provider && !einvoicingReceptionDisabled()) {
 	print '<div class="opacitymedium small paddingtop paddingleft">';
 	print img_picto('', 'info', 'class="pictofixedwidth"').' ';
 	print $langs->trans('EInvoiceReimportHint', $langs->transnoentitiesnoconv('EInvoiceReimport'));
@@ -1400,31 +1402,7 @@ while ($i < $imaxinloop) {
 				} elseif ($key == 'rowid') {
 					print $object->showOutputField($val, $key, (string) $object->id, '');
 				} elseif ($key == 'tracking_idref') {
-					$out = dol_escape_htmltag($object->tracking_idref);
-
-					if (!empty($object->fk_element_type) && !empty($object->fk_element_id)) {
-						if ($object->fk_element_type === 'facture') {
-							require_once DOL_DOCUMENT_ROOT.'/compta/facture/class/facture.class.php';
-							$linkedobj = new Facture($db);
-
-							if ($linkedobj->fetch((int) $object->fk_element_id) > 0) {
-								$out = $linkedobj->getNomUrl(1);
-							}
-						} elseif ($object->fk_element_type === 'invoice_supplier') {
-							require_once DOL_DOCUMENT_ROOT.'/fourn/class/fournisseur.facture.class.php';
-							$linkedobj = new FactureFournisseur($db);
-
-							if ($linkedobj->fetch((int) $object->fk_element_id) > 0) {
-								$out = '<div class="tdoverflowmax200 inline-block lineheightsmall">';
-								$out .= $linkedobj->getNomUrl(1);
-								// The vendor reference is a field of the received document, escaped like the rest of it.
-								if ($linkedobj->ref_supplier) {
-									$out .= '<br><span class="spantitle small">'.dol_escape_htmltag($linkedobj->ref_supplier).'</span>';
-								}
-								$out .= "</div>";
-							}
-						}
-					}
+					$out = $object->getElementNomUrl(1);
 
 					if (strpos($out, '<a ') !== false) {
 						$out = preg_replace('/<a /', '<a target="_blank" rel="noopener noreferrer" ', $out, 1);
