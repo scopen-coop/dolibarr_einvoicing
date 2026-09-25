@@ -73,6 +73,7 @@ require_once DOL_DOCUMENT_ROOT.'/core/lib/fourn.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/fourn/class/fournisseur.facture.class.php';
 require_once DOL_DOCUMENT_ROOT.'/fourn/class/fournisseur.commande.class.php';
 require_once DOL_DOCUMENT_ROOT.'/product/class/product.class.php';
+require_once DOL_DOCUMENT_ROOT.'/core/class/html.formorder.class.php';
 require_once DOL_DOCUMENT_ROOT.'/projet/class/project.class.php';
 dol_include_once('einvoicing/class/utils/SupplierInvoiceHelper.class.php');
 dol_include_once('einvoicing/class/utils/SupplierOrderLineImporter.class.php');
@@ -98,6 +99,12 @@ $search_subprice = GETPOST('search_subprice', 'alphanohtml');
 $search_total_ht = GETPOST('search_total_ht', 'alphanohtml');
 $search_project = GETPOST('search_project', 'alphanohtml');
 $search_extra = array();
+if (GETPOSTISARRAY('search_status')) {
+	$search_status = implode(',', GETPOST('search_status', 'array:intcomma'));
+} else {
+	$search_status = (GETPOST('search_status', 'intcomma') != '' ? GETPOST('search_status', 'intcomma') : GETPOST('statut', 'intcomma'));
+}
+$search_billed = GETPOST('search_billed', 'int');
 
 $limit = GETPOSTINT('limit') ? GETPOSTINT('limit') : $conf->liste_limit;
 $sortfield = GETPOST('sortfield', 'aZ09comma');
@@ -116,6 +123,7 @@ if (!$sortorder) {
 
 $form = new Form($db);
 $object = new FactureFournisseur($db);
+$formorder = new FormOrder($db);
 
 if ($id > 0 || $ref) {
 	$result = $object->fetch($id, $ref);
@@ -175,6 +183,12 @@ foreach ($search_extra as $efname => $efvalue) {
 		$param .= '&search_ef_'.$efname.'='.urlencode($efvalue);
 	}
 }
+if ($search_status != '' && $search_status != '-1') {
+	$param .= '&search_status='.urlencode($search_status);
+}
+if ($search_billed != '') {
+	$param .= '&$search_billed='.((int) ($search_billed));
+}
 
 
 /*
@@ -188,6 +202,8 @@ if (GETPOST('button_removefilter_x', 'alpha') || GETPOST('button_removefilter.x'
 	$search_subprice = '';
 	$search_total_ht = '';
 	$search_project = '';
+	$search_status = '';
+	$search_billed='';
 	foreach ($visibleExtrafields as $efname) {
 		$search_extra[$efname] = '';
 	}
@@ -210,10 +226,10 @@ if ($action == 'confirm_import' && $confirm == 'yes' && $permissiontoimport) {
  * Load the lines
  */
 
-$eligibleStatuses = SupplierOrderLineImporter::eligibleOrderStatuses();
+$notEligibleStatuses = SupplierOrderLineImporter::notEligibleOrderStatuses();
 
 $sql = "SELECT cd.rowid, cd.fk_commande, cd.fk_product, cd.qty, cd.subprice, cd.total_ht, cd.description, cd.product_type,";
-$sql .= " c.ref as order_ref, c.fk_statut as order_status, c.fk_projet,";
+$sql .= " c.ref as order_ref, c.fk_statut as order_status, c.billed, c.fk_projet,";
 $sql .= " p.ref as product_ref, p.label as product_label,";
 $sql .= " pjt.ref as project_ref, pjt.title as project_title";
 foreach ($visibleExtrafields as $efname) {
@@ -227,7 +243,7 @@ if (!empty($visibleExtrafields)) {
 	$sql .= " LEFT JOIN ".$db->prefix()."commande_fournisseurdet_extrafields as efd ON efd.fk_object = cd.rowid";
 }
 $sql .= " WHERE c.fk_soc = ".((int) $object->socid);
-$sql .= " AND c.fk_statut IN (".implode(',', array_map('intval', $eligibleStatuses)).")";
+$sql .= " AND c.fk_statut  NOT IN (".implode(',', array_map('intval', $notEligibleStatuses)).")";
 $sql .= " AND c.entity IN (".getEntity('supplier_order').")";
 $sql .= " AND cd.product_type < 9";
 if ($search_ref != '') {
@@ -247,6 +263,16 @@ if ($search_total_ht != '') {
 }
 if ($showProjectColumn && $search_project != '') {
 	$sql .= natural_search(array('pjt.ref', 'pjt.title'), $search_project);
+}
+if ($search_billed != '' && $search_billed != '-1') {
+	$sql .= " AND c.billed = ".((int) $search_billed);
+}
+//Required triple check because statut=0 means draft filter
+if (GETPOST('statut', 'intcomma') !== '') {
+	$sql .= " AND c.fk_statut IN (".$db->sanitize($db->escape($db->escape(GETPOST('statut', 'intcomma')))).")";
+}
+if ($search_status != '' && $search_status != '-1') {
+	$sql .= " AND c.fk_statut IN (".$db->sanitize($db->escape($search_status)).")";
 }
 foreach ($visibleExtrafields as $efname) {
 	if ($search_extra[$efname] === '' || $search_extra[$efname] === null) {
@@ -361,6 +387,16 @@ $colspan = 6 + ($showProjectColumn ? 1 : 0) + count($visibleExtrafields) + 1;
 // Filters
 print '<tr class="liste_titre_filter">';
 print '<td class="liste_titre"><input type="text" class="flat maxwidth100" name="search_ref" value="'.dol_escape_htmltag($search_ref).'"></td>';
+// Status
+print '<td class="liste_titre center parentonrightofpage">';
+$formorder->selectSupplierOrderStatus($search_status, 1, 'search_status', 'search_status width125 onrightofpage');
+print '</td>';
+
+// Billed
+print '<td class="liste_titre center parentonrightofpage">';
+print $form->selectyesno('search_billed', $search_billed, 1, false, 1, 1, 'search_status width100 onrightofpage');
+print '</td>';
+
 print '<td class="liste_titre"><input type="text" class="flat maxwidth100" name="search_product" value="'.dol_escape_htmltag($search_product).'"></td>';
 print '<td class="liste_titre right"><input type="text" class="flat maxwidth50 right" name="search_qty" value="'.dol_escape_htmltag($search_qty).'"></td>';
 if ($showProjectColumn) {
@@ -379,6 +415,8 @@ print '</tr>';
 // Titles
 print '<tr class="liste_titre">';
 print_liste_field_titre('RefOrderSupplier', $_SERVER['PHP_SELF'], 'c.ref', '', $param, '', $sortfield, $sortorder);
+print_liste_field_titre('Status', $_SERVER['PHP_SELF'], 'c.fk_statut', '', $param, '', $sortfield, $sortorder);
+print_liste_field_titre('Billed', $_SERVER["PHP_SELF"], 'c.billed', '', $param, '', $sortfield, $sortorder, 'center ');
 print_liste_field_titre('ProductRef', $_SERVER['PHP_SELF'], 'p.ref', '', $param, '', $sortfield, $sortorder);
 print_liste_field_titre('Qty', $_SERVER['PHP_SELF'], 'cd.qty', '', $param, '', $sortfield, $sortorder, 'right ');
 if ($showProjectColumn) {
@@ -414,6 +452,17 @@ while ($i < min($num, $limit)) {
 	$orderstatic->statut = $obj->order_status;
 	$orderstatic->status = $obj->order_status;
 	print $orderstatic->getNomUrl(1);
+	print '</td>';
+
+	print '<td class="nowraponall">';
+	$orderstatic->billed = $obj->billed;
+	print $orderstatic->LibStatut($orderstatic->status, 5, $orderstatic->billed);
+	print '</td>';
+
+	print '<td class="center">';
+	if ($orderstatic->billed) {
+		print yn($orderstatic->billed, $langs->trans("Billed"));
+	}
 	print '</td>';
 
 	print '<td class="tdoverflowmax200">';

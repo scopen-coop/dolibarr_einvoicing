@@ -59,12 +59,12 @@ class SupplierOrderLineImporter
 	 *
 	 * @return int[]
 	 */
-	public static function eligibleOrderStatuses()
+	public static function notEligibleOrderStatuses()
 	{
 		return array(
-			CommandeFournisseur::STATUS_ORDERSENT,
-			CommandeFournisseur::STATUS_RECEIVED_PARTIALLY,
-			CommandeFournisseur::STATUS_RECEIVED_COMPLETELY,
+			CommandeFournisseur::STATUS_DRAFT,
+			CommandeFournisseur::STATUS_CANCELED_AFTER_ORDER,
+			CommandeFournisseur::STATUS_REFUSED,
 		);
 	}
 
