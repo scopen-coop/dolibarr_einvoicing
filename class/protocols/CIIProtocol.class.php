@@ -841,7 +841,7 @@ class CIIProtocol extends AbstractProtocol
 	 */
 	protected function depositAnnouncedByDocument(array $parsedHeader)
 	{
-		$announced = abs((float) ($parsedHeader['totalPrepaidAmount'] ?? 0));
+		$announced = (float) ($parsedHeader['totalPrepaidAmount'] ?? 0);
 		if ($announced < 0.005 || in_array((string) ($parsedHeader['businessProcessId'] ?? ''), array('B2', 'S2', 'M2'), true)) {
 			return 0.0;
 		}
@@ -858,6 +858,7 @@ class CIIProtocol extends AbstractProtocol
 	 * ram:TypeCode cannot arbitrate this: CII-DT-018 forbids it below EXTENDED, so it is always absent.
 	 * A reference repeating the document's own number (BT-1) is settled before BT-113 is even read:
 	 * it can never resolve, so waiting for it is waiting for ever (#927).
+	 * A credit note is settled before BT-113 is read too: its BG-3 is the invoice it cancels or corrects, never a deposit.
 	 *
 	 * @param  string					$refDoc           BT-25, the identifier of the referenced document
 	 * @param  array<string,mixed>		$parsedHeader     Parsed document header
@@ -882,6 +883,14 @@ class CIIProtocol extends AbstractProtocol
 				$return_messages[] = 'Document ' . dol_escape_htmltag($documentno) . ' names itself as the invoice it follows; the reference was ignored.';
 			}
 			dol_syslog(get_class($this) . '::resolveMissingReferencedDocument Stepping over self-referencing InvoiceReferencedDocument ref="' . $refDoc . '" for ' . $documentno, LOG_WARNING);
+			return null;
+		}
+
+		if ($this->getDolibarrInvoiceType($parsedHeader['documenttypecode'] ?? null) === CommonInvoice::TYPE_CREDIT_NOTE) {
+			if ($reportSkip) {
+				$return_messages[] = 'Document ' . dol_escape_htmltag((string) $refDoc) . ', ' . $relation . ' ' . dol_escape_htmltag($documentno) . ', was not found in Dolibarr: the credit note is recorded without a link to it, since a credit note references the invoice it cancels or corrects, not a deposit to deduct.';
+			}
+			dol_syslog(get_class($this) . '::resolveMissingReferencedDocument Stepping over unresolved InvoiceReferencedDocument ref="' . $refDoc . '" (credit note) for ' . $documentno, LOG_DEBUG);
 			return null;
 		}
 
@@ -1039,11 +1048,25 @@ class CIIProtocol extends AbstractProtocol
 
 		if ($supplierInvoiceId == -3) {
 			$langs->load("bills");
+			// One existing invoice carries this supplier ref but a different amount. Link straight to its
+			// card so the operator can open it and reconcile, and surface both amounts (the existing one
+			// and the one the received e-invoice announces) so the discrepancy is visible at a glance.
+			$conflicting = SupplierInvoiceHelper::conflictingInvoiceByRef($parsedHeader['documentno'] ?? '', (int) $socId);
+			$conflictingId = $conflicting ? (int) $conflicting['id'] : 0;
+			$conflictingTotal = $conflicting ? (float) $conflicting['total_ttc'] : 0;
+			$modifyurl = $conflictingId > 0
+				? DOL_URL_ROOT.'/fourn/facture/card.php?id='.$conflictingId
+				: DOL_URL_ROOT.'/fourn/facture/list.php?search_refsupplier='.urlencode($parsedHeader['documentno'] ?? '').'&socid='.(int) $socId;
+
 			$action = $langs->trans('FixTheAmountOrModifySupplierRef', $langs->transnoentitiesnoconv("RefSupplierBill"), $parsedHeader['documentno'] ?? '', $langs->trans("Duplicate"));
-			$action .= ' <a class="butAction small smallpaddingimp nomarginleft" href="' . DOL_URL_ROOT.'/fourn/facture/list.php?search_refsupplier='.urlencode($parsedHeader['documentno'] ?? '').'&socid=' . (int) $socId. '" target="_blank">';
-			$action .= '<i class="fas fa-plus-circle"></i> ';
+			$action .= ' <a class="butAction small smallpaddingimp nomarginleft" href="' . $modifyurl . '" target="_blank">';
+			$action .= '<i class="fas fa-pen"></i> ';
 			$action .= $langs->trans('ModifySupplierInvoice');
 			$action .= '</a>';
+
+			$message = $conflictingId > 0
+				? $langs->trans('SupplierInvoiceBadAmountDetail', $parsedHeader['documentno'] ?? '', price($conflictingTotal), price($announcedTotalTtc))
+				: SupplierInvoiceHelper::refLookupErrorMessage($supplierInvoiceId, $parsedHeader['documentno'] ?? '', 'while checking whether it was already imported');
 
 			// Nothing is stored while the reference stays ambiguous, so the flow is postponed rather
 			// than failed: the amount has to be settled by hand either way, and stopping the batch on it
@@ -1051,11 +1074,11 @@ class CIIProtocol extends AbstractProtocol
 			return [
 				'res' => -1,
 				'postponeflow' => 1,
-				'message' => SupplierInvoiceHelper::refLookupErrorMessage($supplierInvoiceId, $parsedHeader['documentno'] ?? '', 'while checking whether it was already imported'),
+				'message' => $message,
 				'businessmessage' => $langs->trans('SupplierInvoiceFoundButWithdifferentAmount', $parsedHeader['documentno'] ?? '', $parsedHeader['grandTotalAmount'] ?? 0),
 				'actioncode' => 'SUPPLIER_INVOICE_FOUND_WITH_BAD_AMOUNT',
 				'actionurl' => 'none',
-				'actiondata' => array('supplierref' => $parsedHeader['documentno'], 'socid' => (int) $socId, 'expectedamount' => $announcedTotalTtc),
+				'actiondata' => array('supplierref' => $parsedHeader['documentno'], 'socid' => (int) $socId, 'expectedamount' => $announcedTotalTtc, 'existinginvoiceid' => $conflictingId, 'existingamount' => $conflictingTotal),
 				'action' => $action
 			];
 		}
@@ -3906,15 +3929,15 @@ class CIIProtocol extends AbstractProtocol
 		if (!isset($parsedHeader['taxTotalAmount']) || !isset($parsedHeader['grandTotalAmount'])) {
 			return;
 		}
-		$announcedTva = abs((float) $parsedHeader['taxTotalAmount']);
+		$announcedTva = (float) $parsedHeader['taxTotalAmount'];
 		// BT-112 plus BT-114, which the invoice carries as a line of its own: what is confronted is what
 		// the buyer owes, BT-115 when the document answers BR-CO-16 (issue #994).
-		$announcedTtc = (float) (SupplierInvoiceHelper::announcedTotalTtc($parsedHeader) ?? abs((float) $parsedHeader['grandTotalAmount']));
+		$announcedTtc = (float) (SupplierInvoiceHelper::announcedTotalTtc($parsedHeader) ?? (float) $parsedHeader['grandTotalAmount']);
 
 		// BT-113 is what the document says was already paid. It moves neither BT-110 nor BT-112, so the
 		// two totals below agree whether or not it was deducted, and an invoice short of its deduction
 		// used to pass this guard and be paid in full (issue #726).
-		$announcedPrepaid = isset($parsedHeader['totalPrepaidAmount']) ? abs((float) $parsedHeader['totalPrepaidAmount']) : null;
+		$announcedPrepaid = isset($parsedHeader['totalPrepaidAmount']) ? (float) $parsedHeader['totalPrepaidAmount'] : null;
 		// TODO Replace with following line ?
 		/*$announcedPrepaid = $this->depositAnnouncedByDocument($parsedHeader);
 		if ($announcedPrepaid == 0) {
@@ -4048,8 +4071,8 @@ class CIIProtocol extends AbstractProtocol
 		}
 
 		// BT-113 is deducted beside the invoice and not from its total, so it is added back on both sides
-		$prepaid = isset($parsedHeader['totalPrepaidAmount']) ? abs((float) $parsedHeader['totalPrepaidAmount']) : 0.0;
-		$announcedDue = abs((float) $parsedHeader['duePayableAmount']) + $prepaid;
+		$prepaid = isset($parsedHeader['totalPrepaidAmount']) ? (float) $parsedHeader['totalPrepaidAmount'] : 0.0;
+		$announcedDue = (float) $parsedHeader['duePayableAmount'] + $prepaid;
 		if (abs($announcedDue - (float) $announcedTtc) < 0.005) {
 			return false;
 		}
@@ -4063,7 +4086,7 @@ class CIIProtocol extends AbstractProtocol
 		$return_messages[] = $langs->trans(
 			'EInvoiceImportPayableMismatch',
 			dol_escape_htmltag((string) ($parsedHeader['documentno'] ?? '')),
-			price2num(abs((float) $parsedHeader['duePayableAmount']), 'MT'),
+			price2num((float) $parsedHeader['duePayableAmount'], 'MT'),
 			price2num((float) $announcedTtc - $prepaid, 'MT')
 		);
 		$return_messages[] = $langs->trans('EInvoiceImportTotalsMismatchAction');
@@ -4504,13 +4527,13 @@ class CIIProtocol extends AbstractProtocol
 				return false;
 			}
 
-			// A credit note is stored negative by Dolibarr while a document announces positive amounts.
-			$sign = $groups[$rate]['base'] < 0 ? -1 : 1;
-			if (abs($groups[$rate]['base'] - $sign * abs((float) ($tax['basisAmount'] ?? 0))) >= 0.005) {
+			// The document announces BG-23 with its own sign, which a credit note stored negative reverses.
+			$sign = SupplierInvoiceHelper::documentSign($invoice);
+			if (abs($groups[$rate]['base'] - $sign * (float) ($tax['basisAmount'] ?? 0)) >= 0.005) {
 				return false;
 			}
 
-			$difference = round($sign * abs((float) ($tax['calculatedAmount'] ?? 0)) - $groups[$rate]['vat'], 2);
+			$difference = round($sign * (float) ($tax['calculatedAmount'] ?? 0) - $groups[$rate]['vat'], 2);
 			// A rounding convention moves the VAT of a rate by at most a cent per line, each line VAT being
 			// rounded once and their total once more. Beyond that the document says something no convention
 			// explains, and it is reported rather than written in.
