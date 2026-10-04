@@ -851,12 +851,12 @@ class CIIProtocol extends AbstractProtocol
 
 	/**
 	 * Decide what to do with a BG-3 reference (BT-25) the buyer does not hold.
-	 * BT-113 is what tells the two cases apart: an amount already paid points at a deposit the import
+	 * depositAnnouncedByDocument() tells the two cases apart: an amount already paid points at a deposit the import
 	 * has to deduct, so the flow waits for it rather than importing an invoice short of its deduction;
 	 * nothing paid means the reference is documentary - a contract number, or the placeholder some
 	 * vendors always emit - and stepping over it costs nothing, as long as it is reported (#880).
 	 * ram:TypeCode cannot arbitrate this: CII-DT-018 forbids it below EXTENDED, so it is always absent.
-	 * A reference repeating the document's own number (BT-1) is settled before BT-113 is even read:
+	 * A reference repeating the document's own number (BT-1) is settled before that amount is read:
 	 * it can never resolve, so waiting for it is waiting for ever (#927).
 	 * A credit note is settled before BT-113 is read too: its BG-3 is the invoice it cancels or corrects, never a deposit.
 	 *
@@ -894,11 +894,11 @@ class CIIProtocol extends AbstractProtocol
 			return null;
 		}
 
-		if ((float) ($parsedHeader['totalPrepaidAmount'] ?? 0) <= 0) {
+		if ($this->depositAnnouncedByDocument($parsedHeader) <= 0) {
 			if ($reportSkip) {
-				$return_messages[] = 'Document ' . dol_escape_htmltag((string) $refDoc) . ', ' . $relation . ' ' . dol_escape_htmltag($documentno) . ', was not found in Dolibarr and was ignored: the received document declares no amount already paid.';
+				$return_messages[] = 'Document ' . dol_escape_htmltag((string) $refDoc) . ', ' . $relation . ' ' . dol_escape_htmltag($documentno) . ', was not found in Dolibarr and was ignored: the received document announces no deposit to attach.';
 			}
-			dol_syslog(get_class($this) . '::resolveMissingReferencedDocument Stepping over unresolved InvoiceReferencedDocument ref="' . $refDoc . '" (no BT-113) for ' . $documentno, LOG_DEBUG);
+			dol_syslog(get_class($this) . '::resolveMissingReferencedDocument Stepping over unresolved InvoiceReferencedDocument ref="' . $refDoc . '" (no deposit announced) for ' . $documentno, LOG_DEBUG);
 			return null;
 		}
 
@@ -1037,12 +1037,22 @@ class CIIProtocol extends AbstractProtocol
 
 		// Check if this invoice has already been imported for this supplier
 		$announcedTotalTtc = SupplierInvoiceHelper::announcedTotalTtc($parsedHeader) ?? 0.0;
+		// announcedTotalTtc() is unsigned (abs). A refund arrives as a negative document total, or as a
+		// credit-note type code (381/503), and Dolibarr stores the matching document as a negative credit
+		// note. Match on the signed amount, otherwise a credit note looks like a "different amount" against
+		// its own already-imported avoir - a false SUPPLIER_INVOICE_FOUND_WITH_BAD_AMOUNT conflict (a bank
+		// refund booked as a supplier credit note is the real-world case).
+		$signedAnnouncedTtc = $announcedTotalTtc;
+		if ((float) ($parsedHeader['grandTotalAmount'] ?? 0) < 0
+			|| $this->getDolibarrInvoiceType($parsedHeader['documenttypecode'] ?? null) === CommonInvoice::TYPE_CREDIT_NOTE) {
+			$signedAnnouncedTtc = -$announcedTotalTtc;
+		}
 		// The tolerance is BT-114: the same document imported before the rounding line existed totals a
 		// rounding amount more, and it is the invoice this is looking for (issue #994).
 		$supplierInvoiceId = SupplierInvoiceHelper::findIdByRef(
 			$parsedHeader['documentno'] ?? null,
 			(int) $socId,
-			$announcedTotalTtc,
+			$signedAnnouncedTtc,
 			abs(SupplierInvoiceHelper::documentRoundingAmount($parsedHeader))
 		);
 
@@ -2175,6 +2185,10 @@ class CIIProtocol extends AbstractProtocol
 					$line[$f] = $this->toFloat($line[$f]);
 			}
 			$line['isDepositLine'] = (bool) ($line['isDepositLine'] ?? false);
+			// BT-155 has no maximum length, the columns it is written to and looked up in hold 128 characters.
+			if (isset($line['prodsellerid'])) {
+				$line['prodsellerid'] = dol_substr(trim((string) $line['prodsellerid']), 0, 128);
+			}
 
 			$lines[] = $line;
 		}
