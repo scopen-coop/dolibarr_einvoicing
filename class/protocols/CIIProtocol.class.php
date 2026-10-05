@@ -702,7 +702,7 @@ class CIIProtocol extends AbstractProtocol
 	 * @param  string 			$file                       		Source string file (XML or PDF string). We use this file to get data of supplier invoice.
 	 * @param  string|null 		$readableViewFile        			Readable view file (PDP Generated readable PDF). We only store it if available.
 	 * @param  string 			$flowId                       		Flow identifier source of the invoice.
-	 * @return array{res:int<-1,1>, message:string, actioncode?: string|null, actionurl?: string|null, action?:string|null}   Returns array with 'res' (1 on success, 0 already exists, -1 on failure) with a 'message' and an optional 'actioncode' and 'action'.
+	 * @return array{res:int<-1,1>, message:string, actioncode?: string|null, actionurl?: string|null, action?:string|null, created?:int}   Returns array with 'res' (1 on success, 0 already exists, -1 on failure) with a 'message', an optional 'actioncode' and 'action', and 'created' set to 1 only when this call is what imported the invoice.
 	 */
 	public function createSupplierInvoiceFromSource($file, $readableViewFile = null, $flowId = '')
 	{
@@ -954,7 +954,7 @@ class CIIProtocol extends AbstractProtocol
 	 * @param  string			$flowId               Source flow identifier
 	 * @param  string			$tempFile             Unique working file for the received XML
 	 * @param  string			$tempFileReadableView Unique working file for the readable view
-	 * @return array{res:int<-1,1>, message:string, action?:string|null}
+	 * @return array{res:int<-1,1>, message:string, action?:string|null, created?:int}	'created' tells the caller whether this call is what brought the invoice in, or found it already imported
 	 */
 	protected function doCreateSupplierInvoiceFromSource($file, $readableViewFile, $flowId, $tempFile, $tempFileReadableView)
 	{
@@ -1068,7 +1068,7 @@ class CIIProtocol extends AbstractProtocol
 				? DOL_URL_ROOT.'/fourn/facture/card.php?id='.$conflictingId
 				: DOL_URL_ROOT.'/fourn/facture/list.php?search_refsupplier='.urlencode($parsedHeader['documentno'] ?? '').'&socid='.(int) $socId;
 
-			$action = $langs->trans('FixTheAmountOrModifySupplierRef', $langs->transnoentitiesnoconv("RefSupplierBill"), $parsedHeader['documentno'] ?? '', $langs->trans("Duplicate"));
+			$action = $langs->trans('FixTheAmountOrModifySupplierRef', $langs->transnoentitiesnoconv("EInvRefSupplierBill"), $parsedHeader['documentno'] ?? '', $langs->trans("Duplicate"));
 			$action .= ' <a class="butAction small smallpaddingimp nomarginleft" href="' . $modifyurl . '" target="_blank">';
 			$action .= '<i class="fas fa-pen"></i> ';
 			$action .= $langs->trans('ModifySupplierInvoice');
@@ -1133,7 +1133,7 @@ class CIIProtocol extends AbstractProtocol
 				dol_syslog("Temporary 'readable pdf file' not found for attachment", LOG_ERR);
 			}
 
-			return ['res' => $supplierInvoiceId, 'message' => implode("\n", $return_messages)];
+			return ['res' => $supplierInvoiceId, 'message' => implode("\n", $return_messages), 'created' => 0];
 		}
 
 		// Check if all referenced documents in the invoice exist in Dolibarr for the same supplier, if not return with error since we need them for correct linking in the invoice
@@ -1284,7 +1284,11 @@ class CIIProtocol extends AbstractProtocol
 						// --------------------------------------------------
 						// Deposit handling
 						// --------------------------------------------------
-						if ($linkedObject->type == FactureFournisseur::TYPE_DEPOSIT) {
+						// The source of a credit note or of a replacement is the invoice it corrects: a deposit
+						// named there is credited, not deducted, and a deposit line would count it twice.
+						$isCorrectedSource = in_array((int) $supplierInvoice->type, array(FactureFournisseur::TYPE_CREDIT_NOTE, FactureFournisseur::TYPE_REPLACEMENT))
+							&& (int) $supplierInvoice->fk_facture_source == (int) $linkedObjectId;
+						if ($linkedObject->type == FactureFournisseur::TYPE_DEPOSIT && !$isCorrectedSource) {
 							$create_deposit_line = 1;
 
 							$depositDiscountRes = $this->getOrCreateDepositDiscount($linkedObject);
@@ -1430,7 +1434,7 @@ class CIIProtocol extends AbstractProtocol
 			}
 
 			// TODO : Save receivedFile in supplier invoice attachments
-			return ['res' => $supplierInvoiceId, 'message' => implode("\n", $return_messages), 'xml_data' => $sourceXml];
+			return ['res' => $supplierInvoiceId, 'message' => implode("\n", $return_messages), 'xml_data' => $sourceXml, 'created' => 1];
 		}
 	}
 
@@ -1451,10 +1455,18 @@ class CIIProtocol extends AbstractProtocol
 	{
 		global $db;
 
+		// Whether this supplier's line charges (BG-28) are folded into the product line's description
+		// instead of imported as a Dolibarr line of their own (community decision, issue #969). Resolved
+		// once: every line of the invoice follows the same choice.
+		$einvoicing = new EInvoicing($db);
+		$mergeLineCharges = $einvoicing->shouldMergeLineChargesIntoDescription((int) $supplierInvoice->socid);
+
 		// Add invoice lines
 		foreach ($parsedLines as $parsedLine) {
 			// Add supplier ID to line for later use in product sync
 			$parsedLine['supplierId'] = $supplierInvoice->socid;
+			// Billing framework (BT-23): tells which default of the vendor a line with no product falls back on
+			$parsedLine['businessProcessId'] = (string) ($parsedHeader['businessProcessId'] ?? '');
 
 			$is_deposit_line = 0;
 			$fk_remise = 0;
@@ -1552,7 +1564,9 @@ class CIIProtocol extends AbstractProtocol
 						'actioncode' => $res['actioncode'] ?? '',
 						'actionurl' => $res['actionurl'] ?? '',
 						'action' => $res['action'] ?? null,
-						'actiondata' => $res['actiondata'] ?? ''
+						'actiondata' => $res['actiondata'] ?? '',
+						'allactiondata' => $res['allactiondata'] ?? array(),
+						'businessmessage' => $res['businessmessage'] ?? ''
 					];
 				}
 				$productId = $res['res'];
@@ -1631,7 +1645,7 @@ class CIIProtocol extends AbstractProtocol
 			// from quantity, unit price and discount, so BT-131 is read and then dropped. A deposit line is left
 			// alone: its amount comes from the discount created out of the deposit invoice.
 			if (!$is_deposit_line) {
-				$amounts = $this->resolveLineAmounts($parsedLine, (float) $line->qty, (float) $line->subprice, (float) $line->remise_percent);
+				$amounts = $this->resolveLineAmounts($parsedLine, (float) $line->qty, (float) $line->subprice, (float) $line->remise_percent, $mergeLineCharges);
 				$line->qty = $amounts['qty'];
 				$line->subprice = $amounts['subprice'];
 				$line->remise_percent = $amounts['remise_percent'];
@@ -1653,14 +1667,27 @@ class CIIProtocol extends AbstractProtocol
 				$line->date_end = $linePeriod['end'];
 			}
 
+			// An invoice line charge (BG-28) is part of BT-131 but has no room in a Dolibarr line, which
+			// holds a quantity, a unit price and a discount and nothing else. By default it follows its
+			// line, the way it would be keyed in by hand, so the unit price stored stays the one the
+			// document gives (BT-146) and the two together are worth what BT-131 announces (issue #735).
+			// EINVOICING_MERGE_LINE_CHARGES_INTO_DESCRIPTION folds it into the line's own description
+			// instead (community decision, issue #969): resolveLineAmounts() was told above to total the
+			// line at the full BT-131, charges included, so there is nothing left to carry on a line of
+			// its own.
+			if ($mergeLineCharges && !$is_deposit_line) {
+				$chargesDescription = $this->buildLineChargesDescription($parsedLine);
+				if ($chargesDescription !== '') {
+					$line->desc = trim(dol_concatdesc($line->desc, $chargesDescription));
+				}
+			}
+
 			$supplierInvoice->lines[] = $line;
 
-			// An invoice line charge (BG-28) is part of BT-131 but has no room in a Dolibarr line, which
-			// holds a quantity, a unit price and a discount and nothing else. It follows its line, the way
-			// it would be keyed in by hand, so the unit price stored stays the one the document gives
-			// (BT-146) and the two together are worth what BT-131 announces. See issue #735.
-			foreach ($this->buildLineChargeLines($parsedLine) as $chargeLine) {
-				$supplierInvoice->lines[] = $chargeLine;
+			if (!$mergeLineCharges) {
+				foreach ($this->buildLineChargeLines($parsedLine) as $chargeLine) {
+					$supplierInvoice->lines[] = $chargeLine;
+				}
 			}
 		}
 
@@ -1870,21 +1897,25 @@ class CIIProtocol extends AbstractProtocol
 	 * cannot express BT-131 - zero quantity, zero price, opposite sign - carries BT-131 as a single unit instead
 	 * (issues #726 and #772). Any other line whose quantity times price is not BT-131 is imported at BT-131, at
 	 * the unit price that totals it (issues #844 and #850), and what was rewritten is reported. The charges of
-	 * the line (BG-28) are out of all this: they leave on lines of their own.
+	 * the line (BG-28) are out of all this by default: they leave on lines of their own. $mergeLineCharges
+	 * (issue #969) folds them into this line's own description instead, so this line must total the full
+	 * BT-131, charges included, there being no charge line left to carry them.
 	 *
 	 * @param	array<string,mixed>		$parsedLine			One line as parseInvoiceLines() returns it
 	 * @param	float					$qty				Quantity read from the document (BT-129)
 	 * @param	float					$subprice			Unit price the caller resolved (BT-146, discount applied)
 	 * @param	float					$remisePercent		Discount percent the caller resolved
+	 * @param	bool					$mergeLineCharges	True when the line's charges are folded into its description (issue #969), so BT-131 is kept whole here
 	 * @return	array{qty:float,subprice:float,remise_percent:float,warning:string}	What to store, and what to report about it
 	 */
-	protected function resolveLineAmounts(array $parsedLine, $qty, $subprice, $remisePercent)
+	protected function resolveLineAmounts(array $parsedLine, $qty, $subprice, $remisePercent, $mergeLineCharges = false)
 	{
 		$lineid = (string) ($parsedLine['lineid'] ?? '?');
 
 		// A line charge (BG-28) is part of BT-131 but rejoins the invoice as a line of its own (issue #735),
-		// so what this line has to total is BT-131 less those charges.
-		$charges = $this->lineChargeTotal($parsedLine);
+		// so what this line has to total is BT-131 less those charges - unless $mergeLineCharges keeps it
+		// on this very line, in which case BT-131 stays whole.
+		$charges = $mergeLineCharges ? 0.0 : $this->lineChargeTotal($parsedLine);
 		$announced = round((float) ($parsedLine['lineTotalAmount'] ?? 0) - $charges, 2);
 		$announcedText = $announced . ($charges == 0.0 ? '' : ' (BT-131 less the charges that leave on their own line)');
 
@@ -3851,6 +3882,72 @@ class CIIProtocol extends AbstractProtocol
 		}
 
 		return $chargeLines;
+	}
+
+
+	/**
+	 * Describe the charges of a received line (BG-28) inside the description of the product line itself,
+	 * instead of a Dolibarr line of their own (EINVOICING_MERGE_LINE_CHARGES_INTO_DESCRIPTION, issue
+	 * #969): one entry per charge, its label in bold when the WYSIWYG line editor is active
+	 * (FCKEDITOR_ENABLE_DETAILS), its amount signed - matching how the issuer's own reconstructed
+	 * document already shows them (e.g. "Charge: Fuel surcharge : +35.69").
+	 *
+	 * @param	array<string,mixed>		$parsedLine		One line as parseInvoiceLines() returns it
+	 * @return	string									Text to append to the line description, empty when the line has no charge
+	 */
+	protected function buildLineChargesDescription(array $parsedLine)
+	{
+		global $langs;
+
+		if (empty($parsedLine['lineAllowances']) || !is_array($parsedLine['lineAllowances'])) {
+			return '';
+		}
+
+		// The import runs from a cron job as well as from a page, so the language file of the module is
+		// not necessarily loaded: without this the label of a charge would be its own translation key.
+		$langs->load('einvoicing@einvoicing');
+		$htmlEnabled = (bool) getDolGlobalInt('FCKEDITOR_ENABLE_DETAILS');
+		$label = $langs->transnoentitiesnoconv('EInvoicingLineChargeLabel');
+
+		$entries = array();
+		foreach ($parsedLine['lineAllowances'] as $allowanceCharge) {
+			// Charges only (indicator "true"). The allowances (indicator "false") stay the discount
+			// percentage of the line itself, as resolveLineDiscountPercent() already folds them: they
+			// never left on a line of their own, so there is nothing new to describe here.
+			if (($allowanceCharge['indicator'] ?? '') !== 'true') {
+				continue;
+			}
+
+			$actualAmount = (float) ($allowanceCharge['actualAmount'] ?? 0);
+			if ($actualAmount == 0.0) {
+				continue;
+			}
+
+			$reason = trim((string) ($allowanceCharge['reason'] ?? ''));
+			$reasonCode = trim((string) ($allowanceCharge['reasonCode'] ?? ''));
+			if ($reason === '') {
+				// BR-44 accepts a reason code alone, and a bare code says nothing to whoever reads the
+				// invoice, so it is labelled.
+				$reason = $langs->transnoentitiesnoconv('EInvoicingLineCharge');
+				if ($reasonCode !== '') {
+					$reason .= ' (' . $reasonCode . ')';
+				}
+			}
+
+			$amountText = '+' . number_format(abs($actualAmount), 2, '.', '');
+
+			if ($htmlEnabled) {
+				$entries[] = '<b>' . dol_escape_htmltag($label) . ':</b> ' . dol_escape_htmltag($reason) . ' : ' . $amountText;
+			} else {
+				$entries[] = $label . ': ' . $reason . ' : ' . $amountText;
+			}
+		}
+
+		if (empty($entries)) {
+			return '';
+		}
+
+		return implode($htmlEnabled ? '<br>' : "\n", $entries);
 	}
 
 
