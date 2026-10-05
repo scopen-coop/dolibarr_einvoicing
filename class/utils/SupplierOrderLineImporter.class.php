@@ -231,7 +231,7 @@ class SupplierOrderLineImporter
 		}
 
 		$byOrder = array();
-		$eligibleStatuses = self::eligibleOrderStatuses();
+		$notEligibleStatuses = self::notEligibleOrderStatuses();
 		while ($obj = $db->fetch_object($resql)) {
 			if ((int) $obj->fk_soc != (int) $invoice->socid) {
 				$db->free($resql);
@@ -240,7 +240,7 @@ class SupplierOrderLineImporter
 				$db->rollback();
 				return -1;
 			}
-			if (!in_array((int) $obj->fk_statut, $eligibleStatuses, true)) {
+			if (in_array((int) $obj->fk_statut, $notEligibleStatuses, true)) {
 				$db->free($resql);
 				$invoice->error = $langs->trans('SupplierOrderLineImportWrongStatus');
 				$invoice->errors[] = $invoice->error;

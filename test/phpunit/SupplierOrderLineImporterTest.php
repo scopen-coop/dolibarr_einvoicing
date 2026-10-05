@@ -138,14 +138,15 @@ class SupplierOrderLineImporterTest extends CommonClassTest
 	 *
 	 * @return void
 	 */
-	public function testEligibleOrderStatuses()
+	public function testnotEligibleOrderStatuses()
 	{
-		$statuses = SupplierOrderLineImporter::eligibleOrderStatuses();
-		$this->assertContains(CommandeFournisseur::STATUS_ORDERSENT, $statuses);
-		$this->assertContains(CommandeFournisseur::STATUS_RECEIVED_PARTIALLY, $statuses);
-		$this->assertContains(CommandeFournisseur::STATUS_RECEIVED_COMPLETELY, $statuses);
-		$this->assertNotContains(CommandeFournisseur::STATUS_DRAFT, $statuses);
-		$this->assertNotContains(CommandeFournisseur::STATUS_CANCELED, $statuses);
+		$statuses = SupplierOrderLineImporter::notEligibleOrderStatuses();
+		$this->assertNotContains(CommandeFournisseur::STATUS_ORDERSENT, $statuses);
+		$this->assertNotContains(CommandeFournisseur::STATUS_RECEIVED_PARTIALLY, $statuses);
+		$this->assertNotContains(CommandeFournisseur::STATUS_RECEIVED_COMPLETELY, $statuses);
+		$this->assertContains(CommandeFournisseur::STATUS_DRAFT, $statuses);
+		$this->assertContains(CommandeFournisseur::STATUS_CANCELED_AFTER_ORDER, $statuses);
+		$this->assertContains(CommandeFournisseur::STATUS_REFUSED, $statuses);
 	}
 
 	/**
