@@ -184,7 +184,9 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 
 						$result = $protocol->generateInvoice($invoiceObject, $outputlangs, $pdfPath);		// Generate E-invoice (embed into the real generated file)
 
-						if ($result >= 0) {
+						// $result is the path of the file, or -1: under PHP 8 a path compared to 0 is compared as
+						// a string, and "/..." >= "0" is false, so the configuration warning was never shown.
+						if (!is_numeric($result) || $result >= 0) {
 							if (!defined('NOLOGIN')) {	// If in backoffice context
 								setEventMessages($message, array(), $messagecss);
 							}
@@ -341,6 +343,8 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 			// (immutable invoice; correct with a credit note / corrective invoice). Opt out with
 			// EINVOICING_ALLOW_RESEND_TRANSMITTED.
 			$locked = $einvoicing->isTransmittedLockActive($object->id, $object->ref);
+			// Regenerate and send are also offered again on an invoice the seller's AP rejected at emission.
+			$sendLocked = $locked && !$einvoicing->isOnlyRejectedAtEmission((int) $object->id);
 
 			if (!empty($currentStatusDetails['otherprovider'])) {
 				$forcedisabling = $langs->trans("WarningEinvoicingInvoiceStatusDifferentProvider", $currentStatusDetails['otherprovider']);
@@ -374,12 +378,13 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 				// invoice (dev only: let's you rebuild the CII/Factur-X to inspect the XML; nothing is re-sent).
 				if (getDolGlobalString('EINVOICING_ALLOW_REGEN_TRANSMITTED')) {
 					$perm = (bool) $user->hasRight("facture", "creer");
-				} elseif (!$locked && in_array($currentStatusDetails['code'], [
+				} elseif (!$sendLocked && in_array($currentStatusDetails['code'], [
 					$einvoicing::STATUS_GENERATED,
 					$einvoicing::STATUS_ERROR,
 					$einvoicing::STATUS_UNKNOWN,
 					$einvoicing::STATUS_AWAITING_VALIDATION,		// We may retry to Regenerate/resend. We should get an error if we do, but it is interesting to test the retry.
-					$einvoicing::STATUS_AWAITING_ACK				// We may retry to Regenerate/resend. We should get an error if we do, but it is interesting to test the retry.
+					$einvoicing::STATUS_AWAITING_ACK,				// We may retry to Regenerate/resend. We should get an error if we do, but it is interesting to test the retry.
+					$einvoicing::STATUS_REJECTED					// unlocked only when rejected at emission, see EInvoicing::isOnlyRejectedAtEmission()
 				])) {
 					$perm = (bool) $user->hasRight("facture", "creer");
 				} else {
@@ -414,18 +419,18 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 				// If the e-invoice is generated but not sent, or if it was sent and a validation error was
 				// received, display the button to (re)send the e-invoice.
 				// Re-send is offered for not-yet-transmitted states, plus AWAITING_*/REJECTED as a deliberate
-				// retry/correction affordance. Once REALLY transmitted (persistent flow_id) it is locked, and the
-				// only opt-out is the option EINVOICING_ALLOW_RESEND_TRANSMITTED. That option is read in a single
-				// place, EInvoicing::isTransmittedLockActive() (assigned to $locked above: it returns false as
-				// soon as EINVOICING_ALLOW_RESEND_TRANSMITTED is set), which the server-side send_to_pdp gate
+				// retry/correction affordance. Once REALLY transmitted (persistent flow_id) it is locked, unless the
+				// seller's AP only ever rejected it at emission, or EINVOICING_ALLOW_RESEND_TRANSMITTED is set. Both
+				// are read in a single place, EInvoicing::isSendLocked() (assigned to $sendLocked above),
+				// which the server-side send_to_pdp gate
 				// uses too, so the button visibility here and the real enforcement can never drift apart.
-				if (!$locked && !einvoicingIsSendDisabled() && in_array($currentStatusDetails['code'], [
+				if (!$sendLocked && !einvoicingIsSendDisabled() && in_array($currentStatusDetails['code'], [
 					$einvoicing::STATUS_GENERATED,
 					$einvoicing::STATUS_ERROR,
 					$einvoicing::STATUS_UNKNOWN,
 					$einvoicing::STATUS_AWAITING_VALIDATION,		// retry affordance (PA will refuse a duplicate)
 					$einvoicing::STATUS_AWAITING_ACK,				// retry affordance (PA will refuse a duplicate)
-					$einvoicing::STATUS_REJECTED					// resend after correcting a rejected e-invoice (gated by EINVOICING_ALLOW_RESEND_TRANSMITTED)
+					$einvoicing::STATUS_REJECTED					// resend after correcting a rejected e-invoice (unlocked only when rejected at emission)
 				])) {
 					$resend = false;
 					if (in_array($currentStatusDetails['code'], [$einvoicing::STATUS_AWAITING_VALIDATION, $einvoicing::STATUS_AWAITING_ACK, $einvoicing::STATUS_REJECTED])) {
@@ -614,7 +619,11 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 		// Add button to change the entity (multi-company) of a supplier invoice (we test context invoicesuppliercard but also main for old versions of module)
 		if (getDolGlobalString('EINVOICING_ALLOW_MULTICOMPANY_INVOICE_MOVE') && isModEnabled('multicompany') && in_array($object->element, ['invoice_supplier'])
 			&& !empty($object->id) && $user->hasRight('fournisseur', 'facture', 'creer') && preg_match('/invoicesuppliercard|main/', $parameters['currentcontext'] ?? '')) {
-			if ($object->isEditable()) {
+			// isEditable() only exists since Dolibarr 23 and answers a negative code when refused. Before, same
+			// rule as the core card offers "Modify" with: no payment and not dispatched in bookkeeping.
+			$editable = method_exists($object, 'isEditable') ? ($object->isEditable() > 0)
+				: ($object->getSommePaiement() == 0 && $object->getVentilExportCompta() == 0);
+			if ($editable) {
 				print '<a class="butAction" href="' . DOL_URL_ROOT . '/fourn/facture/card.php?id=' . $object->id . '&action=change_entity&token=' . newToken() . '">'
 					. $langs->trans('ChangeEntity') . '</a>';
 			} else {
@@ -727,7 +736,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 				? array('send_to_pdp')
 				: array('send_to_pdp', 'generate_einvoice');
 			if (in_array($action, $lockedActions) && isset($currentStatusDetails)
-				&& $einvoicing->isTransmittedLockActive($object->id, $object->ref)) {
+				&& $einvoicing->isSendLocked($object->id, $object->ref)) {
 				setEventMessages($langs->trans('EInvoiceAlreadyTransmittedLocked', $currentStatusDetails['flow_id']), null, 'warnings');
 				$action = '';
 			}
@@ -741,7 +750,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 					$einvoicing::STATUS_GENERATED,
 					$einvoicing::STATUS_ERROR,
 					$einvoicing::STATUS_UNKNOWN,
-					$einvoicing::STATUS_REJECTED			// resend a corrected rejected e-invoice (gated by EINVOICING_ALLOW_RESEND_TRANSMITTED)
+					$einvoicing::STATUS_REJECTED			// resend a corrected rejected e-invoice (unlocked only when rejected at emission)
 				])
 			) {
 				// Same gates and same transmission as the mass action of the invoice list
@@ -890,6 +899,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 				// validates it too. Validation comes first: a status accepted by the platform cannot be taken
 				// back, while a validation that fails (numbering, closed period, ...) must leave it untouched.
 				$sendtheanswer = true;
+				$justvalidated = false;
 				if (in_array($pdpstatuscode, EInvoicing::STATUSES_ACCEPTING_A_DOCUMENT, true) && (int) $object->status === FactureFournisseur::STATUS_DRAFT) {
 					if (!$permissiontovalidate) {
 						$message = $langs->trans('EInvoiceApprovalNeedsValidateRight');
@@ -913,12 +923,16 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 
 					setEventMessages($langs->trans('EInvoiceApprovalValidatedTheInvoice', (string) $object->ref), array(), 'mesgs');
 
-					// EINVOICING_SEND_APPROVED_ON_VALIDATION makes that validation answer the platform on
-					// its own: sending the status again here would duplicate the flow. Read what the
-					// validation actually recorded rather than the setting, so a status sent by any other
-					// path is not doubled either.
-					if ($einvoicing->hasSentStatusMessage($object->id, $object->element, $pdpstatuscode)) {
-						$sendtheanswer = false;
+					$justvalidated = true;
+				}
+
+				// A CDAR deposit is irreversible: a status the platform did not reject is never sent twice.
+				if ($einvoicing->hasLiveStatusMessage($object->id, $object->element, $pdpstatuscode)) {
+					$sendtheanswer = false;
+
+					// The validation above may have sent it already (EINVOICING_SEND_APPROVED_ON_VALIDATION).
+					if (!$justvalidated) {
+						setEventMessages($langs->trans('EInvoiceStatusAlreadySentToPlatform', $einvoicing->getStatusLabel($pdpstatuscode)), array(), 'warnings');
 					}
 				}
 
@@ -1269,7 +1283,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 		// Regenerating a transmitted invoice resets its local status and re-opens the trap the send gate
 		// closes, so it is refused here as on the invoice card, unless EINVOICING_ALLOW_REGEN_TRANSMITTED.
 		if (!getDolGlobalString('EINVOICING_ALLOW_REGEN_TRANSMITTED')
-			&& $einvoicing->isTransmittedLockActive($invoice->id, (string) $invoice->ref)) {
+			&& $einvoicing->isSendLocked($invoice->id, (string) $invoice->ref)) {
 			$status = $einvoicing->fetchLastknownInvoiceStatus($invoice->id, (string) $invoice->ref);
 			$out['reason'] = $langs->trans('EInvoiceAlreadyTransmittedLocked', is_array($status) ? $status['flow_id'] : '');
 			return $out;
@@ -1365,7 +1379,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 
 		// An invoice already transmitted is immutable: re-sending it makes the PA refuse a duplicate.
 		// Keyed on the persistent flow_id, like the invoice card, and honors EINVOICING_ALLOW_RESEND_TRANSMITTED.
-		if ($einvoicing->isTransmittedLockActive($invoice->id, (string) $invoice->ref)) {
+		if ($einvoicing->isSendLocked($invoice->id, (string) $invoice->ref)) {
 			$out['reason'] = $langs->trans('EInvoiceAlreadyTransmittedLocked', is_array($status) ? $status['flow_id'] : '');
 			return $out;
 		}
@@ -1373,7 +1387,8 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 		if (!is_array($status) || empty($status['file']) || !in_array($status['code'], array(
 			$einvoicing::STATUS_GENERATED,
 			$einvoicing::STATUS_ERROR,
-			$einvoicing::STATUS_UNKNOWN
+			$einvoicing::STATUS_UNKNOWN,
+			$einvoicing::STATUS_REJECTED	// past the lock above: rejected at emission only, or EINVOICING_ALLOW_RESEND_TRANSMITTED
 		))) {
 			$out['reason'] = $langs->trans("EInvoiceNotGeneratedYetSoNotSent");
 			return $out;
@@ -1831,8 +1846,14 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 		$contexts = explode(':', $parameters['context']);
 
 		if (array_intersect($contexts, ['invoicelist', 'supplierinvoicelist', 'thirdpartylist', 'productservicelist', 'societelist'])) {
-			if (GETPOST('search_pdplinked', 'alpha') !== '' && GETPOST('search_pdplinked', 'alpha') == getDolGlobalString('EINVOICING_PDP')) {
-				$this->resprints .= " AND ext.provider = '" . $db->escape(getDolGlobalString('EINVOICING_PDP')) . "'";
+			// The 'search_pdplinked' select option is built from the provider name with any trailing
+			// 'ViaPartner' stripped (see printFieldListOption()), and that is also what document.provider
+			// gets stored as (see e.g. SuperPDPProvider::providershort). Comparing against the raw
+			// EINVOICING_PDP config value here would never match for a *ViaPartner provider, silently
+			// turning this filter into a no-op.
+			$tmpeinvoicingpartner = preg_replace('/ViaPartner/i', '', getDolGlobalString('EINVOICING_PDP'));
+			if (GETPOST('search_pdplinked', 'alpha') !== '' && GETPOST('search_pdplinked', 'alpha') == $tmpeinvoicingpartner) {
+				$this->resprints .= " AND ext.provider = '" . $db->escape($tmpeinvoicingpartner) . "'";
 			}
 		}
 
