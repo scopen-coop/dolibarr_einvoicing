@@ -585,6 +585,13 @@ class EInvoicing
 	const EXTRAFIELD_BUYER_ORDER_REFERENCE = 'buyer_order_reference';
 
 	/**
+	 * Name, into llx_einvoicing_extrafields, of the discounts the import created for the document level
+	 * allowances (BG-20) of a received invoice, comma separated. An import made again deletes them before
+	 * creating them anew: only freed, they would stay available as credit on the vendor.
+	 */
+	const EXTRAFIELD_IMPORTED_DISCOUNTS = 'import_discount_ids';
+
+	/**
 	 * Name, into llx_einvoicing_extrafields, of the buyer reference (BT-10): a reference owned by the
 	 * buyer, used to route the invoice inside its own organisation (business unit, service reference,
 	 * internal mailbox...). A plain EN 16931 core term, unrelated to the public sector, so it is kept
@@ -1687,8 +1694,8 @@ class EInvoicing
 	/**
 	 * Check required information for E-Invoicing
 	 *
-	 * @param Facture 	$invoice   Invoice object
-	 * @return array{res:int, message:string} Returns array with 'res' (1 on success, -1 on failure and 0 on warning) and info 'message'
+	 * @param 	Facture 	$invoice   			Invoice object
+	 * @return 	array{res:int, message:string} 	Returns array with 'message' and 'res' (1 on success, -1 on failure, 0 on warning)
 	 */
 	public function checkRequiredinformations($invoice)
 	{
@@ -1746,6 +1753,8 @@ class EInvoicing
 		}
 
 		$message = implode('<br>', $messages);
+
+		dol_syslog("checkRequiredinformations return res=" . $res, LOG_DEBUG, 0, "einvoicing");
 
 		return ['res' => $res, 'message' => $message];
 	}
@@ -4245,7 +4254,7 @@ class EInvoicing
 		$return = 0;	// By default, no einvoicing.
 
 		if (getDolGlobalInt('EINVOICING_USE_BILLING_CONTACT_AS_BUYER')) {
-			// Critical feature to NEVER use. VERY BAD PRACTICE(and probably not legal, an invoicing organization MUST be an official thirdparty with prof ID).
+			// Critical feature to NEVER use !!! VERY BAD PRACTICE (and probably not legal, an invoiced organization MUST be an official thirdparty with prof ID).
 			// WILL NEVER BE SUPPORTED.
 			$billingContactIds = $object->getIdContact('external', 'BILLING');
 			if (!empty($billingContactIds) && $object->fetch_contact($billingContactIds[0]) > 0 && is_object($object->contact)) {
@@ -4266,7 +4275,7 @@ class EInvoicing
 			$object->fetch_thirdparty();
 		}
 
-		if ($object->thirdparty->country_code == 'FR') {	// We need to sync invoice if for french customer
+		if ($object->thirdparty->country_code === 'FR') {	// We need to sync invoice if for french customer
 			$return = self::STATUS_NOT_GENERATED;
 		}
 
@@ -4312,8 +4321,8 @@ class EInvoicing
 
 
 	/**
-	 * Return if an invoice must be managed by EInvoicing. Boolean counterpart of
-	 * needEInvoiceManagement(), which answers with a status code.
+	 * Return if an invoice must be managed by EInvoicing (analysing the thirdparty, the POS used, the option EINVOICING_SKIP_B2C, ...).
+	 * Boolean counterpart of needEInvoiceManagement() + test if einvoicing status is IGNORE*.
 	 *
 	 * @param 	Facture|FactureRec		$object		Object
 	 * @return 	bool								True if the invoice is in the e-invoicing scope
@@ -4322,7 +4331,7 @@ class EInvoicing
 	{
 		$status = $this->needEInvoiceManagement($object);
 
-		return !empty($status) && !self::isIgnoredStatus($status);
+		return !empty($status) && !self::isIgnoredStatus($status);		// If there is an einvoicing status and it is not IGNOR*
 	}
 
 
