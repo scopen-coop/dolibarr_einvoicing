@@ -1865,7 +1865,9 @@ class EInvoicing
 		// Access Point Status + Field for real time update info
 		$resprints .= '<tr class="treinvoicing_collapseseparator">';
 		$resprints .= '<td class="">';
-		$resprints .= $form->editfieldkey($form->textwithpicto($langs->trans("einvoicingInvoiceStatus"), $langs->transnoentitiesnoconv("einvoiceStatusFieldHelp")), 'einvoicestatus', '', $object, (int) $editenable);
+		//$resprints .= $form->editfieldkey($form->textwithpicto($langs->trans("einvoicingInvoiceStatus"), $langs->transnoentitiesnoconv("einvoiceStatusFieldHelp")), 'einvoicestatus', '', $object, (int) $editenable);
+		//For now we set this input read only
+		$resprints .= $form->editfieldkey($form->textwithpicto($langs->trans("einvoicingInvoiceStatus"), $langs->transnoentitiesnoconv("einvoiceStatusFieldHelp")), 'einvoicestatus', '', $object, 0);
 		/*$resprints .= $langs->trans("einvoicingInvoiceStatus");
 		$resprints .= ' <i class="fas fa-info-circle em088 opacityhigh classfortooltip" title="';
 		$resprints .= $langs->trans("einvoiceStatusFieldHelp") . '"></i>';*/
