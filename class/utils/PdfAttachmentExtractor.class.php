@@ -330,7 +330,7 @@ class PdfAttachmentExtractor extends tcpdi_parser
 			}
 		}
 
-		if (false === \is_string($decoded) || '' === $decoded) {
+		if (false === is_string($decoded) || '' === $decoded) {
 			// If the decoded string is empty, that means decoding failed.
 			throw new \Exception('decodeFilterFlateDecode: invalid data');
 		}
