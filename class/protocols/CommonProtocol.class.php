@@ -1621,8 +1621,6 @@ trait CommonProtocol
 			'actiondata' => array('socid' => (int) $supplierId),
 			'allactiondata' => array('setdefaultroutingmixed' => array('label' => $langs->trans('SetDefaultRoutingMixed'), 'url' => $setupUrl, 'actiondata' => array('socid' => (int) $supplierId))),
 		);
-	}
-
 	/**
 	 * Whether a supplier-invoice line received from the Access Point must be stored as a free
 	 * description line, skipping product matching (and product auto-creation) even when a
