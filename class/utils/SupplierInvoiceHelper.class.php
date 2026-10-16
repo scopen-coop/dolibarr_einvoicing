@@ -151,6 +151,19 @@ class SupplierInvoiceHelper
 	}
 
 	/**
+	 * Compare invoice totals while accepting a difference of at most one cent.
+	 *
+	 * @param float $amount1 The first amount to compare
+	 * @param float $amount2 The second amount to compare
+	 * @return bool Whether the amounts differ by no more than one cent
+	 */
+	private static function areAmountsWithinOneCent($amount1, $amount2): bool
+	{
+		// The small epsilon keeps an exact cent difference within the limit despite binary float representation.
+		return abs((float) $amount1 - (float) $amount2) <= 0.010000001;
+	}
+
+	/**
 	 * Compare a Dolibarr supplier invoice to its related e-invoice and check they are identical
 	 * using following criteria : currency, VAT excl. total, VAT incl. total, VAT total, basis
 	 * amount & VAT amount of each VAT rate
@@ -234,16 +247,16 @@ class SupplierInvoiceHelper
 			$announcedHt = self::announcedTotalHt($parsedHeader);
 			$announcedTtc = self::announcedTotalTtc($parsedHeader);
 
-			if ($announcedHt !== null && !self::areAmountsEqual($details['total_ht'], $announcedHt)) {
+			if ($announcedHt !== null && !self::areAmountsWithinOneCent($details['total_ht'], $announcedHt)) {
 				$amountErrors[$calculationRule][] = $langs->trans('SupplierInvoiceComparisonTotalVatExclDifference', $announcedHt, $details['total_ht']);
 			}
 
-			if ($announcedTtc !== null && !self::areAmountsEqual($details['total_ttc'], $announcedTtc)) {
+			if ($announcedTtc !== null && !self::areAmountsWithinOneCent($details['total_ttc'], $announcedTtc)) {
 				$amountErrors[$calculationRule][] = $langs->trans('SupplierInvoiceComparisonTotalVatInclDifference', $announcedTtc, $details['total_ttc']);
 			}
 
 			// VAT total
-			if (!self::areAmountsEqual($details['total_tva'], $parsedHeader['taxTotalAmount'])) {
+			if (!self::areAmountsWithinOneCent($details['total_tva'], $parsedHeader['taxTotalAmount'])) {
 				$amountErrors[$calculationRule][] = $langs->trans('SupplierInvoiceComparisonTotalVatDifference', $parsedHeader['taxTotalAmount'], $details['total_tva']);
 			}
 
@@ -609,8 +622,8 @@ class SupplierInvoiceHelper
 	 * Compared with their sign: a credit note is stored negative by Dolibarr and announced positive, so
 	 * its totals are negated first; any other invoice carries the sign of its document, a negative
 	 * invoice (BT-3 380 with negative lines) included. What a deposit attached to the invoice deducts
-	 * is added back first, the document announcing its totals before the deduction. The tolerance is there
-	 * for the float representation, not for a difference: the document carries its totals to the cent.
+	 * is added back first, the document announcing its totals before the deduction.
+	 * The announced VAT and TTC totals may differ by up to one cent.
 	 *
 	 * @param	FactureFournisseur	$invoice			The invoice, with its totals as stored
 	 * @param	float				$announcedTva		BT-110 of the received document
@@ -630,8 +643,8 @@ class SupplierInvoiceHelper
 		$invoiceTva = $sign * ((float) $invoice->total_tva + $deposits['tva']);
 		$invoiceTtc = $sign * ((float) $invoice->total_ttc + $deposits['ttc']);
 
-		if (abs($invoiceTva - (float) $announcedTva) >= 0.005
-			|| abs($invoiceTtc - (float) $announcedTtc) >= 0.005) {
+		if (!self::areAmountsWithinOneCent($invoiceTva, $announcedTva)
+			|| !self::areAmountsWithinOneCent($invoiceTtc, $announcedTtc)) {
 			return false;
 		}
 
@@ -1354,9 +1367,9 @@ class SupplierInvoiceHelper
 	}
 
 	/**
-	 * Compare three pairs of amounts (HT, VAT, TTC) with the same rounding as the rest of the
-	 * supplier-invoice helpers. A credit note stores negative totals in Dolibarr and positive
-	 * ones in the e-invoice: the Dolibarr side is compared in absolute value.
+	 * Compare three pairs of amounts (HT, VAT, TTC), accepting a difference of up to one cent.
+	 * A credit note stores negative totals in Dolibarr and positive ones in the e-invoice: the
+	 * Dolibarr side is compared in absolute value.
 	 *
 	 * @param	float	$doliHt			Dolibarr total excluding VAT
 	 * @param	float	$doliTva		Dolibarr VAT total
@@ -1387,13 +1400,13 @@ class SupplierInvoiceHelper
 		$compareTtc = $isCreditNote ? abs($doli['total_ttc']) : $doli['total_ttc'];
 
 		$errors = array();
-		if (!self::areAmountsEqual($compareHt, $pa['total_ht'])) {
+		if (!self::areAmountsWithinOneCent($compareHt, $pa['total_ht'])) {
 			$errors[] = $langs->trans('SupplierInvoiceComparisonTotalVatExclDifference', $pa['total_ht'], $doli['total_ht']);
 		}
-		if (!self::areAmountsEqual($compareTva, $pa['total_tva'])) {
+		if (!self::areAmountsWithinOneCent($compareTva, $pa['total_tva'])) {
 			$errors[] = $langs->trans('SupplierInvoiceComparisonTotalVatDifference', $pa['total_tva'], $doli['total_tva']);
 		}
-		if (!self::areAmountsEqual($compareTtc, $pa['total_ttc'])) {
+		if (!self::areAmountsWithinOneCent($compareTtc, $pa['total_ttc'])) {
 			$errors[] = $langs->trans('SupplierInvoiceComparisonTotalVatInclDifference', $pa['total_ttc'], $doli['total_ttc']);
 		}
 
