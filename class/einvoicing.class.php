@@ -579,6 +579,13 @@ class EInvoicing
 	const EXTRAFIELD_TOTALS_MISMATCH = 'import_totals_mismatch';
 
 	/**
+	 * Name, into llx_einvoicing_extrafields, of the note left on a supplier invoice whose EXTENDED document
+	 * announces its VAT rounded per rate while its totals add up the VAT rounded per line. Holds both VAT
+	 * totals, so the card can tell why the invoice differs from BT-110 (issue #1166).
+	 */
+	const EXTRAFIELD_VAT_ROUNDED_PER_LINE = 'import_vat_rounded_per_line';
+
+	/**
 	 * Name, into llx_einvoicing_extrafields, of the order reference the supplier declared on the
 	 * invoice it sent (BT-13). Kept whether or not it matched a purchase order of Dolibarr.
 	 */
@@ -605,6 +612,12 @@ class EInvoicing
 	 * forces it off, no row inherits the global default. See shouldMergeLineChargesIntoDescription().
 	 */
 	const EXTRAFIELD_MERGE_LINE_CHARGES = 'merge_line_charges';
+
+	/**
+	 * Name, into llx_einvoicing_extrafields (element_type 'societe'), of the identifier this customer
+	 * gave us as its supplier (its vendor code). Sent as BT-29 without scheme on its invoices.
+	 */
+	const EXTRAFIELD_SELLER_ID_BY_BUYER = 'seller_id_by_buyer';
 
 	/**
 	 * ISO/IEC 6523 scheme identifier of the French routing code ("code de routage"), the scheme the
@@ -2571,6 +2584,8 @@ class EInvoicing
 				$resprints .= '</tr>';
 			}
 
+			$resprints .= $this->sellerIdByBuyerRowHtml($object, $mode, $parameters, $expand_display);
+
 			return $resprints;
 		}
 
@@ -2742,7 +2757,42 @@ class EInvoicing
 			$resprints .= '</tr>';
 		}
 
+		$resprints .= $this->sellerIdByBuyerRowHtml($object, $mode, $parameters, $expand_display);
+
 		return $resprints;
+	}
+
+	/**
+	 * Row of the thirdparty card with the identifier this customer gave us as its supplier (BT-29, issue #1151).
+	 *
+	 * @param	Societe					$object				Thirdparty
+	 * @param	string					$mode				'create', 'edit' or view
+	 * @param	array<string,mixed>		$parameters			Hook parameters
+	 * @param	bool					$expand_display		Whether the block is expanded
+	 * @return	string										HTML of the row, '' when the thirdparty is not a customer
+	 */
+	private function sellerIdByBuyerRowHtml($object, $mode, $parameters, $expand_display)
+	{
+		global $langs, $form;
+
+		if (!in_array((int) $object->client, array(1, 3), true)) {
+			return '';
+		}
+
+		$value = ($mode == 'create') ? '' : (string) $this->getExtraFieldValue($object->id, 'societe', self::EXTRAFIELD_SELLER_ID_BY_BUYER);
+
+		$out = '<tr class="treinvoicing_collapseseparator trseller_id_by_buyer '.($expand_display ? '' : 'hidden').'">';
+		$out .= '<td>' . $form->textwithpicto($langs->trans("EInvoicingSellerIdByBuyer"), $langs->trans("EInvoicingSellerIdByBuyerHelp")) . '</td>';
+		$out .= '<td'.(empty($parameters['colspanvalue']) ? '' : ' colspan="'.(((int) $parameters['colspanvalue']) - 1).'"').'>';
+		if ($mode == 'create' || $mode == 'edit') {
+			$out .= '<input type="text" name="einvoicing_seller_id_by_buyer" class="flat minwidth300" maxlength="255" spellcheck="false" value="' . dolPrintHTMLForAttribute($value) . '">';
+		} else {
+			$out .= dol_escape_htmltag($value);
+		}
+		$out .= '</td>';
+		$out .= '</tr>';
+
+		return $out;
 	}
 
 	/**
