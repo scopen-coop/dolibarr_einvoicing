@@ -1,0 +1,6 @@
+						// TVA non applicable - Vente objet antiquité : VATEX-FR-J
+						// TVA non applicable - Vente objet art :       VATEX-FR-I
+					$retour = "0225";	// SIREN or SIREN_XXX.  	Einvoice global ID, example: "000000002" or URI OD, example "315143296_1939"
+		$idEl = $dom->createElementNS($ramNs, 'ram:IssuerAssignedID');
+		$idEl->appendChild($dom->createTextNode($invoiceRef));
+		$refDoc->appendChild($idEl);

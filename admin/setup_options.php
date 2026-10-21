@@ -379,6 +379,15 @@ if (!einvoicingReceptionDisabled()) {			// If sync AP to DOLI is not disabled or
 	$item->fieldParams['forcereload'] = 1;
 	$item->fieldParams['warningifon'] = 1;
 
+	// Setup conf to give a barcode to the products created at import. Off by default: the codes of our
+	// numbering are not to be spent on vendor products.
+	if (getDolGlobalString("EINVOICING_PRODUCTS_AUTO_GENERATION") && isModEnabled('barcode')) {
+		$item = $formSetup->newItem('EINVOICING_PRODUCTS_AUTO_BARCODE')->setAsYesNo();
+		$item->helpText = $langs->transnoentities('EINVOICING_PRODUCTS_AUTO_BARCODE_HELP');
+		$item->defaultFieldValue = '0';
+		$item->cssClass = 'minwidth500';
+	}
+
 	// Setup conf to import lines as free description lines when no product is found and no default product exist on supplier
 	// This option is in conflict with EINVOICING_PRODUCTS_AUTO_GENERATION and with MAIN_DISABLE_FREE_LINES,
 	// so it is disabled if EINVOICING_PRODUCTS_AUTO_GENERATION is on or MAIN_DISABLE_FREE_LINES is on
@@ -388,6 +397,32 @@ if (!einvoicingReceptionDisabled()) {			// If sync AP to DOLI is not disabled or
 		$item->defaultFieldValue = '0';
 		$item->cssClass = 'minwidth500';
 		$item->fieldParams['warningifon'] = 1;
+	}
+
+	// Setup conf to give a catch-all product to the lines no product and no default of the vendor resolved (issue #1146).
+	// Off by default, and pointless with the automatic product creation, which it would always pre-empt.
+	if (!getDolGlobalString("EINVOICING_PRODUCTS_AUTO_GENERATION")) {
+		$item = $formSetup->newItem('EINVOICING_DEFAULT_PRODUCT_CATCHALL')->setAsYesNo();
+		$item->helpText = $langs->transnoentities('EINVOICING_DEFAULT_PRODUCT_CATCHALL_HELP');
+		$item->defaultFieldValue = '0';
+		$item->cssClass = 'minwidth500';
+		$item->fieldParams['forcereload'] = 1;
+
+		// The product itself, editable only once the option above is on. Saved only when posted, so a
+		// product already chosen survives while the option is off.
+		$item = $formSetup->newItem('EINVOICING_DEFAULT_PRODUCT_CATCHALL_ID')->setAsProduct();
+		$item->helpText = $langs->transnoentities('EINVOICING_DEFAULT_PRODUCT_CATCHALL_ID_HELP');
+		$item->cssClass = 'minwidth500';
+		$item->setValueFromPostCallBack(function () use ($item) {
+			if (!GETPOSTISSET($item->confKey)) {
+				return 0;
+			}
+			$item->fieldValue = (GETPOSTINT($item->confKey) > 0 ? (string) GETPOSTINT($item->confKey) : '');
+			return 1;
+		});
+		if (!getDolGlobalInt('EINVOICING_DEFAULT_PRODUCT_CATCHALL')) {
+			$item->fieldInputOverride = '<span class="opacitymedium">'.$langs->trans('EINVOICING_DEFAULT_PRODUCT_CATCHALL_LOCKED').'</span>';
+		}
 	}
 
 	// Setup conf to choose the default of the vendor a line of a mixed invoice (BT-23 in M) falls back on.

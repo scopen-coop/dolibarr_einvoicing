@@ -37,6 +37,12 @@ dol_include_once('einvoicing/class/providers/PDPProviderManager.class.php');
 class InterfaceEInvoicingTriggers extends DolibarrTriggers
 {
 	/**
+	 * Warnings reported by the trigger (declared by DolibarrTriggers only since Dolibarr 23)
+	 * @var string[]
+	 */
+	public $warnings = array();
+
+	/**
 	 * Constructor
 	 *
 	 * @param DoliDB $db Database handler
@@ -149,6 +155,16 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 				}
 			}
 
+			// Identifier this customer gave us as its supplier, sent as BT-29 (issue #1151). An empty value
+			// deletes it. A save that does not carry the field (API, mass action, import) leaves it untouched.
+			if (GETPOSTISSET('einvoicing_seller_id_by_buyer')) {
+				$result = $einvoicing->insertOrUpdateExtraField($socId, 'societe', EInvoicing::EXTRAFIELD_SELLER_ID_BY_BUYER, trim(GETPOST('einvoicing_seller_id_by_buyer', 'alphanohtml')));
+				if ($result < 0) {
+					$error++;
+					$this->errors[] = $langs->trans('FailedToSaveSellerIdByBuyer').' '.$einvoicing->error;
+				}
+			}
+
 			if ($error) {
 				return -4;
 			}
@@ -232,7 +248,7 @@ class InterfaceEInvoicingTriggers extends DolibarrTriggers
 										$this->warnings[] = $message;
 									}
 								}
-							} elseif ($result['res'] == 0) {	// Warning case
+							} elseif ($checkresult['res'] == 0) {	// Warning case
 								$message = $langs->trans("InvoiceGeneratedWithWarnings") . ': <br>' . $checkresult['message'];
 								if ((float) DOL_VERSION >= 23) {
 									$this->warnings[] = $message;
