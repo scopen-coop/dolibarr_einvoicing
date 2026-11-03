@@ -1053,9 +1053,11 @@ class CIIProtocolTest extends CommonClassTest
 	 */
 	public function testABarcodeTheNumberingCannotGiveExplainsTheRefusal()
 	{
+		global $langs;
+
 		list($res) = $this->importWithBarcodeSetup(0, '');
 		$this->assertLessThan(0, (int) $res['res']);
-		$this->assertStringContainsString('its numbering module gave none', (string) $res['message']);
+		$this->assertStringContainsString($langs->trans('ErrorEInvoicingBarcodeRequiredOnImport'), (string) $res['message']);
 	}
 
 	/**
@@ -1326,7 +1328,7 @@ class CIIProtocolTest extends CommonClassTest
 		$found = $this->matchUnknownLine($ids['socid'], 'M1', '');
 		$this->assertSame(-1, (int) $found['res'], 'M1 with no choice in the setup must stop');
 		$this->assertSame('DEFAULT_ROUTING_MIXED_UNSET', $found['actioncode'] ?? '');
-		$this->assertStringContainsString('setup_options.php', (string) ($found['actionurl'] ?? ''));
+		$this->assertStringContainsString('setup_receive.php', (string) ($found['actionurl'] ?? ''));
 
 		$this->assertSame($ids['service'], (int) $this->matchUnknownLine($ids['socid'], 'M1', 'service')['res'], 'M1 must use the default service when the setup says so');
 		$this->assertSame($ids['product'], (int) $this->matchUnknownLine($ids['socid'], 'M2', 'product')['res'], 'M2 must use the default product when the setup says so');
@@ -1547,7 +1549,7 @@ class CIIProtocolTest extends CommonClassTest
 	 */
 	public function testACreditNoteSignedLikeAnInvoiceIsRecordedAsSent()
 	{
-		global $conf, $db;
+		global $conf, $db, $langs;
 
 		foreach (array('EINVOICING_IMPORT_AS_FREE_LINES', 'EINVOICING_PRODUCTS_AUTO_GENERATION', 'FACTURE_ENABLE_NEGATIVE_LINES', 'INVOICE_KEEP_DISCOUNT_LINES_AS_IN_ORIGIN') as $name) {
 			$this->savedConstants[$name] = isset($conf->global->$name) ? $conf->global->$name : null;
@@ -1560,13 +1562,14 @@ class CIIProtocolTest extends CommonClassTest
 		foreach (array(0, 1) as $keepSign) {
 			$conf->global->FACTURE_ENABLE_NEGATIVE_LINES = $keepSign;
 			$conf->global->INVOICE_KEEP_DISCOUNT_LINES_AS_IN_ORIGIN = $keepSign;
-			$xml = str_replace('EINV1077-0001', 'EINV1077-' . strtoupper(bin2hex(random_bytes(4))), $fixture);
+			$documentno = 'EINV1077-' . strtoupper(bin2hex(random_bytes(4)));
+			$xml = str_replace('EINV1077-0001', $documentno, $fixture);
 
 			$res = (new CIIProtocol($db))->createSupplierInvoiceFromSource($xml, null, 'test1077');
 			$id = (int) ($res['res'] ?? 0);
 			$this->assertGreaterThan(0, $id, 'options ' . $keepSign . ': ' . strip_tags((string) ($res['message'] ?? '')));
 			$this->createdInvoiceIds[] = $id;
-			$this->assertStringContainsString('carries amounts with the sign the vendor gave them', (string) $res['message']);
+			$this->assertStringContainsString($langs->trans('EInvoiceImportCreditNoteKeptAsReceived', $documentno), (string) $res['message']);
 
 			$invoice = new FactureFournisseur($db);
 			$invoice->fetch($id);
@@ -1858,5 +1861,68 @@ class CIIProtocolTest extends CommonClassTest
 		$this->assertSame('PRODUCT_NOT_FOUND', $result['actioncode'] ?? '');
 		$this->assertArrayHasKey('setdefaultproduct', $result['allactiondata'] ?? array());
 		$this->assertStringContainsString($langs->trans('EInvoiceNoLineNeedsDefaultProduct'), (string) ($result['action'] ?? ''));
+	}
+
+	/**
+	 * Prepaid amounts (BT-113), billing frames (BT-23), and the deposit still to attach.
+	 *
+	 * @return	array<string,array{0:?float,1:string,2:float}>
+	 */
+	public static function prepaidAmounts(): array
+	{
+		return array(
+			'a deposit'                     => array(120.0, 'B1', 120.0),
+			'half a cent under float noise' => array(0.004999999999999, 'B1', 0.004999999999999),
+			'below half a cent'             => array(0.004, 'B1', 0.0),
+			'absent'                        => array(null, 'B1', 0.0),
+			'negative'                      => array(-5.0, 'B1', 0.0),
+			'already paid frame'            => array(120.0, 'B2', 0.0),
+		);
+	}
+
+	/**
+	 * Only a prepaid amount writing a positive cent, outside an already paid frame, is a deposit to attach.
+	 *
+	 * @dataProvider prepaidAmounts
+	 *
+	 * @param	?float	$prepaid	BT-113, null when absent
+	 * @param	string	$frame		BT-23
+	 * @param	float	$expected	Amount still to attach
+	 * @return	void
+	 */
+	public function testOnlyAPositiveCentIsADepositToAttach($prepaid, $frame, $expected)
+	{
+		global $db;
+
+		$method = new ReflectionMethod(CIIProtocol::class, 'depositAnnouncedByDocument');
+		$method->setAccessible(true);
+
+		$header = array('businessProcessId' => $frame);
+		if ($prepaid !== null) {
+			$header['totalPrepaidAmount'] = $prepaid;
+		}
+
+		$this->assertSame($expected, $method->invokeArgs(new CIIProtocol($db), array($header)));
+	}
+
+	/**
+	 * A payable that answers BR-CO-16 to the cent does not mark the invoice.
+	 *
+	 * @return	void
+	 */
+	public function testAPayableAnsweringToTheCentIsNoContradiction()
+	{
+		global $db;
+
+		$method = new ReflectionMethod(CIIProtocol::class, 'flagPayableMismatch');
+		$method->setAccessible(true);
+		$protocol = new CIIProtocol($db);
+
+		foreach (array(array(1.02, 0.0, 1.015), array(1.1, 2.2, 3.3)) as list($due, $prepaid, $announcedTtc)) {
+			$messages = array();
+			$header = array('duePayableAmount' => $due, 'totalPrepaidAmount' => $prepaid, 'documentno' => 'TEST');
+			$this->assertFalse($method->invokeArgs($protocol, array(0, $header, 0.0, $announcedTtc, &$messages)), 'BT-115 ' . $due . ' + BT-113 ' . $prepaid . ' against ' . $announcedTtc);
+			$this->assertCount(0, $messages);
+		}
 	}
 }

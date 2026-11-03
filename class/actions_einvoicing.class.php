@@ -660,6 +660,11 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 	{
 		global $db, $langs, $user, $conf;
 
+		// Only an admin can disable and enable a module: the others are not told, nor is the check run
+		if (!empty($user->admin)) {
+			EInvoicing::warnIfReactivationNeeded();
+		}
+
 		// Before anything else, and before the early return below: a list of the core builds its
 		// $arrayfields before it knows any action, and the versions that offer no 'completeArrayFields'
 		// hook pass the array by reference here instead. See addFieldsToList().
@@ -2004,7 +2009,8 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 			$this->resprints .= ' AND EXISTS (SELECT 1 FROM ' . $db->prefix() . 'einvoicing_routing as subrt';
 			$this->resprints .= ' WHERE subrt.fk_soc = s.rowid';	// Alias of the thirdparty in the thirdparty list of the core
 			$this->resprints .= " AND subrt.routing_type = 'thirdparty' AND subrt.active = 1";
-			$this->resprints .= " AND subrt.routing_id = '" . $db->escape(GETPOST('search_routing_id', 'alpha')) . "')";
+			$this->resprints .= natural_search('subrt.routing_id', GETPOST('search_routing_id', 'alpha'));
+			$this->resprints .= ")";
 		}
 
 		if (in_array('invoicelist', $contexts) && (!getDolGlobalString('EINVOICING_DISABLE_SYNC_DOLI_TO_AP') || getDolGlobalString('EINVOICING_ONLY_GENERATE'))) {
@@ -2357,9 +2363,7 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 				$obj = $parameters['obj'];
 
 				print '<td class="tdoverflowmax125">';
-				if ($obj->pdplink_id) {
-					print dolPrintHTML($obj->routing_id);
-				}
+				print dolPrintHTML($obj->routing_id);
 				print '</td>';
 				if (isset($parameters['i']) && empty($parameters['i'])) {
 					$parameters['totalarray']['nbfield']++;
@@ -2708,6 +2712,69 @@ class ActionsEInvoicing extends CommonHookActions  // @phan-suppress-current-lin
 				name.insertAdjacentHTML("beforeend", '.json_encode($anchor).');
 			})();
 			</script>'."\n";
+
+		return 0;
+	}
+
+	/**
+	 * Add the state of the scheduled synchronization to the open elements dashboard of the home page
+	 * (issue #1142). It counts as one late element while the job failed or no longer runs. Hidden when
+	 * the synchronization is not scheduled: module Scheduled jobs off, job disabled or not found.
+	 *
+	 * @param	array<string,mixed>	$parameters		Hook parameters
+	 * @param	object				$object			Unused
+	 * @param	string				$action			Unused
+	 * @param	HookManager			$hookmanager	Hook manager
+	 * @return	int									0 in all cases, the dashboard is only completed
+	 */
+	public function addOpenElementsDashboardLine($parameters, $object, &$action, $hookmanager)
+	{
+		global $db, $langs, $user;
+
+		if (!$user->hasRight('einvoicing', 'read')) {
+			return 0;
+		}
+
+		include_once DOL_DOCUMENT_ROOT.'/core/class/workboardresponse.class.php';	// @phpstan-ignore includeOnce.fileNotFound (PHPStan takes DOL_DOCUMENT_ROOT from install/inc.php of the core, where it is '..')
+		$langs->load("einvoicing@einvoicing");
+
+		$code = einvoicingSyncJobState(einvoicingSyncJobHealth($db));
+		if (in_array($code, array('notfound', 'disabled'), true)) {
+			return 0;
+		}
+		$problem = in_array($code, array('stuck', 'failed', 'late'), true);
+
+		$board = new WorkboardResponse();
+		$board->label = $langs->trans("EInvoicingSyncJobBoard", einvoicingSyncJobStateLabel($code));
+		$board->url = dol_buildpath('/einvoicing/einvoicingindex.php', 1);
+		$board->img = img_object('', 'einvoicing@einvoicing');
+		$board->nbtodo = $problem ? 1 : 0;
+		$board->nbtodolate = $problem ? 1 : 0;
+
+		$this->results = array('einvoicing_sync' => $board);
+
+		return 0;
+	}
+
+	/**
+	 * Put the line of addOpenElementsDashboardLine() in the Invoices card of the core, so it takes the look
+	 * of the core instead of a card of its own
+	 *
+	 * @param	array<string,mixed>	$parameters		Hook parameters
+	 * @param	object				$object			Unused
+	 * @param	string				$action			Unused
+	 * @param	HookManager			$hookmanager	Hook manager
+	 * @return	int									0 in all cases
+	 */
+	public function addOpenElementsDashboardGroup($parameters, $object, &$action, $hookmanager)
+	{
+		// The core merges the returned groups over its own: the group is returned whole, the line added to it
+		if (empty($parameters['dashboardgroup']['facture']['stats']) || !is_array($parameters['dashboardgroup']['facture']['stats'])) {
+			return 0;
+		}
+		$group = $parameters['dashboardgroup']['facture'];
+		$group['stats'][] = 'einvoicing_sync';
+		$this->results = array('facture' => $group);
 
 		return 0;
 	}

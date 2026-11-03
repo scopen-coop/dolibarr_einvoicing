@@ -380,8 +380,11 @@ if ($chorus && dol_strlen((string) $promise_code) > 50) {
 // Buyer reference (BT-10): a reference owned by the buyer, used to route the invoice inside its own
 // organisation. The Chorus Pro service code keeps feeding it when the dedicated property is empty:
 // Annexe A of XP Z12-012 documents BT-10 as the "Service Executant" of the public sector, so that
-// mapping is a documented usage of the term (issue #678).
+// mapping is a documented usage of the term (issue #678). In between, the default of the customer (issue #1210).
 $buyerReference = $einvoicing->getExtraFieldValue($object->id, $object->element, EInvoicing::EXTRAFIELD_BUYER_REFERENCE);
+if (trim((string) $buyerReference) === '') {
+	$buyerReference = $einvoicing->getExtraFieldValue($object->socid, 'societe', EInvoicing::EXTRAFIELD_BUYER_REFERENCE);
+}
 if (trim((string) $buyerReference) === '') {
 	$buyerReference = $object->array_options['options_d4d_service_code'] ?? null;
 }
@@ -636,17 +639,26 @@ foreach ($object->lines as $line) {
 			$description = $line->multilangs[$newlang]["description"];  // @phan-suppress-current-line PhanTypeArraySuspiciousNullable
 		}
 	}
-	if (empty($libelle)) {
-		$libelle = $line->product_label ? $line->product_label : "";
-	}
+	// A seller who hides the product label on the PDF (the core reads this constant for every line,
+	// whatever its name says) keeps it out of the e-invoice too: BT-153 is then named from the
+	// description, as for a line with no product. The label stays the last resort, BT-153 being mandatory.
+	$hideProductLabel = getDolGlobalString('PDF_HIDE_PRODUCT_LABEL_IN_SUPPLIER_LINES') !== '';
+	$productLabel = (empty($libelle) ? ($line->product_label ? $line->product_label : "") : $libelle);
+	$libelle = $hideProductLabel ? "" : $productLabel;
 	if (empty($description)) {
 		$description = $line->desc ? dol_string_nohtmltag($line->desc, 0) : "";
 	}
 	if (empty($libelle) && !empty($description)) {
-		$libelle = dol_trunc(dolGetFirstLineOfText(dol_string_nohtmltag($description)), 49, 'right', 'UTF-8', 1);
+		// The first line, line feeds kept (0): the default of dol_string_nohtmltag() turns them into
+		// spaces, and BT-153 was the whole description cut at 49 characters. Not dolGetFirstLineOfText(),
+		// which appends "..." to an item name whose rest BT-154 carries anyway.
+		$libelle = dol_trunc(trim(preg_split('/\R/', dol_string_nohtmltag($description, 0))[0]), 49, 'right', 'UTF-8', 1);
 		if ($libelle == $description) {
 			$description = "";
 		}
+	}
+	if (empty($libelle)) {
+		$libelle = $productLabel;
 	}
 
 	// A discount line still standing here is a deposit deducted, and its description is the sentinel the
@@ -763,7 +775,7 @@ foreach ($object->lines as $line) {
 		'prodname'                  => $libelle,			// BT-153
 		'proddesc'                  => $description,		// BT-154
 		'prodsellerid'              => $line->product_ref ? $line->product_ref : "",
-		'prodbuyerid'               => null,
+		'prodbuyerid'               => ($line->fk_product > 0 ? $einvoicing->getCustomerProductReference($line->fk_product, $object->socid) : ''),	// BT-156 (issue #1151)
 		'prodglobalidtype'          => null,
 		'prodglobalid'              => null,
 		'prodmultilangs'            => [],
@@ -822,6 +834,10 @@ foreach ($object->lines as $line) {
 		'discountPercent'       	=> $LineDiscountPercent,
 	];
 
+	// BT-155 is optional: a ref the PDF hides (MAIN_GENERATE_DOCUMENTS_HIDE_REF) is not sent either.
+	if (getDolGlobalString('MAIN_GENERATE_DOCUMENTS_HIDE_REF')) {
+		$linesData[$numligne]['prodsellerid'] = "";
+	}
 
 
 	// If a unit price including tax is known (rarely)
