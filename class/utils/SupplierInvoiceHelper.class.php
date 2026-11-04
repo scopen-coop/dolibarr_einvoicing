@@ -768,9 +768,7 @@ class SupplierInvoiceHelper
 		$invoiceTva = $sign * ((float) $invoice->total_tva + $deposits['tva']);
 		$invoiceTtc = $sign * ((float) $invoice->total_ttc + $deposits['ttc']);
 
-		if (!einvoicingAmountsEqual($invoiceTva, (float) $announcedTva)
-			|| !einvoicingAmountsEqual($invoiceTtc, (float) $announcedTtc)
-			|| !self::areAmountsWithinOneCent($invoiceTva, $announcedTva)
+		if (!self::areAmountsWithinOneCent($invoiceTva, $announcedTva)
 			|| !self::areAmountsWithinOneCent($invoiceTtc, $announcedTtc)) {
 			return false;
 		}
