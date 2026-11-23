@@ -627,11 +627,23 @@ class EInvoicing
 	const EXTRAFIELD_BUYER_ORDER_REFERENCE = 'buyer_order_reference';
 
 	/**
+	 * Name, into llx_einvoicing_extrafields, of the despatch advice reference (BT-16) forced on one
+	 * invoice. When empty, the reference of the shipment linked to the invoice is used.
+	 */
+	const EXTRAFIELD_DESPATCH_ADVICE_REFERENCE = 'despatch_advice_reference';
+
+	/**
 	 * Name, into llx_einvoicing_extrafields, of the discounts the import created for the document level
 	 * allowances (BG-20) of a received invoice, comma separated. An import made again deletes them before
 	 * creating them anew: only freed, they would stay available as credit on the vendor.
 	 */
 	const EXTRAFIELD_IMPORTED_DISCOUNTS = 'import_discount_ids';
+
+	/**
+	 * Name, into llx_einvoicing_extrafields, of the invoice (BT-25) a received credit note or replacement
+	 * invoice corrects while that invoice is not in Dolibarr yet: importing it later sets the link (#1234).
+	 */
+	const EXTRAFIELD_AWAITED_SOURCE_REF = 'import_awaited_source_ref';
 
 	/**
 	 * Name, into llx_einvoicing_extrafields, of the buyer reference (BT-10): a reference owned by the
@@ -1034,15 +1046,16 @@ class EInvoicing
 	 * Get the path of the CII XML received for a supplier invoice, if there is one to read.
 	 *
 	 * The file is the one the reception saved beside the supplier invoice, so the naming is the one of
-	 * CIIProtocol::saveEInvoiceFileToSupplierInvoiceAttachment(): <ref supplier>_einvoice.xml, prefixed
-	 * with the reference of the invoice unless it was received before #1174 or the prefix is disabled,
-	 * in the directory of the invoice. A document received in Factur-X is a PDF, which Dolibarr
-	 * previews on its own and which is not concerned here.
+	 * CIIProtocol::saveEInvoiceFileToSupplierInvoiceAttachment(): <ref supplier>_einvoice.xml, or
+	 * _original.xml for the Original kept beside it on option, prefixed with the reference of the invoice
+	 * unless it was received before #1174 or the prefix is disabled, in the directory of the invoice.
+	 * A document received in Factur-X is a PDF, which Dolibarr previews on its own.
 	 *
 	 * @param 	FactureFournisseur 	$supplierInvoice 	Supplier invoice the document was received for.
+	 * @param	string				$suffix				'original' for the Original kept on option, '' for the imported document.
 	 * @return 	string									Full path of the XML, empty string if there is none.
 	 */
-	public function getSupplierEInvoiceXmlFilePath($supplierInvoice)
+	public function getSupplierEInvoiceXmlFilePath($supplierInvoice, $suffix = '')
 	{
 		global $conf;
 
@@ -1050,9 +1063,15 @@ class EInvoicing
 			return '';
 		}
 
+		if ($suffix === '') {
+			$suffix = 'einvoice';
+		} elseif (!in_array($suffix, array('einvoice', 'original'), true)) {
+			return '';
+		}
+
 		$base = $conf->fournisseur->dir_output . '/facture/';
 		$ref = dol_sanitizeFileName($supplierInvoice->ref);
-		$filename = dol_sanitizeFileName($supplierInvoice->ref_supplier . '_einvoice.xml');
+		$filename = dol_sanitizeFileName($supplierInvoice->ref_supplier . '_' . $suffix . '.xml');
 
 		$dir = $base . get_exdir($supplierInvoice->id, 2, 0, 0, $supplierInvoice, 'invoice_supplier') . $ref;
 		foreach (array($ref . '-' . $filename, $filename) as $name) {
@@ -1900,7 +1919,10 @@ class EInvoicing
 		// e-invoicing for eligible (FR) invoices. Preselect the qualified default instead: "To generate / STATUS_NOT_GENERATED" for invoices that must be managed,
 		// "Do not manage" otherwise.
 		if ($mode == 'create' || $action == 'create') {
-			if (GETPOSTISSET('seteinvoicestatus')) {
+			// When the thirdparty is selected, card.php reloads the form and posts the status that was shown. Keep it only if
+			// the user changed it himself (einvoicestatus_userset, set by the js below): otherwise it was the default computed
+			// for the previous (often empty) thirdparty and the default must be computed again for the selected one.
+			if (GETPOSTISSET('seteinvoicestatus') && GETPOSTINT('einvoicestatus_userset')) {
 				$currentStatusInfo['code'] = GETPOSTINT('seteinvoicestatus');
 			} else {
 				// At creation the hook receives a blank Facture object: its socid is NOT set yet (the
@@ -2006,7 +2028,7 @@ class EInvoicing
 			$arrayofeinvoicestatus = $this->getEinvoiceStatusOptions(0, 0, 0, ($action == 'create' ? 1 : 0), 0, ((empty($currentStatusInfo['code']) && $action != 'create') ? 0 : 1), ($action != 'create' ? 1 : 0));
 
 			// If we create a credit note from another invoice, if original invoice has a status to ignore einvoicing, we propagate it by default to the new credit note to create
-			if (!GETPOSTISSET('seteinvoicestatus') && $action == 'create' && GETPOSTINT('fac_avoir') > 0 && GETPOSTINT('type') == Facture::TYPE_CREDIT_NOTE) {
+			if ((!GETPOSTISSET('seteinvoicestatus') || !GETPOSTINT('einvoicestatus_userset')) && $action == 'create' && GETPOSTINT('fac_avoir') > 0 && GETPOSTINT('type') == Facture::TYPE_CREDIT_NOTE) {
 				$tmpinvoicesrc = new Facture($this->db);
 				// A source we cannot read tells us nothing: leave the default the qualification rules just computed.
 				if ($tmpinvoicesrc->fetch(GETPOSTINT('fac_avoir')) > 0) {
@@ -2018,6 +2040,11 @@ class EInvoicing
 			}
 
 			$resprints .=  $form->selectarray("seteinvoicestatus", $arrayofeinvoicestatus, $currentStatusInfo['code'], 0, 0, 0, '', 1);
+			if ($action == 'create') {
+				// Flag a choice made by the user, so it is kept when the form is reloaded (see above)
+				$resprints .=  '<input type="hidden" name="einvoicestatus_userset" id="einvoicestatus_userset" value="' . (GETPOSTINT('einvoicestatus_userset') ? 1 : 0) . '">';
+				$resprints .=  '<script>jQuery(document).ready(function() { jQuery("#seteinvoicestatus").on("change", function() { jQuery("#einvoicestatus_userset").val(1); }); });</script>';
+			}
 			if ($action != 'create') {
 				$resprints .=  '<input type="submit" class="button button-edit smallpaddingimp reposition" value="' . $langs->trans('Modify') . '">';
 				$resprints .=  '</form>';
@@ -2230,6 +2257,35 @@ class EInvoicing
 				$resprints .= dol_escape_htmltag($currentBuyerReference);
 			} elseif ($customerBuyerReference !== '') {
 				$resprints .= '<span class="opacitymedium">' . $langs->trans("EInvoiceBuyerReferenceCustomerDefault") . ' (' . dol_escape_htmltag($customerBuyerReference) . ')</span>';
+			}
+			$resprints .= '</td>';
+			$resprints .= '</tr>';
+		}
+
+		// Despatch advice reference (BT-16, issue #1151): the shipment linked to the invoice, unless one is
+		// forced here. Stored into llx_einvoicing_extrafields, like the buyer reference above.
+		if (($object->element == 'facture' || $object->element == 'invoice') && $object->id > 0) {
+			$currentDespatchAdvice = (string) $this->getExtraFieldValue($object->id, $object->element, self::EXTRAFIELD_DESPATCH_ADVICE_REFERENCE);
+			$resprints .= '<tr class="treinvoicing_collapseseparator">';
+			$resprints .= '<td>';
+			$resprints .= $form->editfieldkey($form->textwithpicto($langs->trans("EInvoiceDespatchAdviceReference"), $langs->trans("EInvoiceDespatchAdviceReferenceHelp")), 'einvoice_despatch_advice', '', $object, (int) $editenable);
+			$resprints .= '</td>';
+			$resprints .= '<td>';
+			if ($action == 'editeinvoice_despatch_advice' && $editenable) {
+				$resprints .= '<form name="setdespatchadvice" action="' . $_SERVER["PHP_SELF"] . '?id=' . $object->id . '" method="post">';
+				$resprints .= '<input type="hidden" name="token" value="' . newToken() . '">';
+				$resprints .= '<input type="hidden" name="action" value="setdespatchadvice">';
+				$resprints .= '<input type="hidden" name="page_y" value="page_y">';
+				$resprints .= '<input type="text" name="einvoice_despatch_advice" class="minwidth200" maxlength="255" value="' . dol_escape_htmltag($currentDespatchAdvice) . '">';
+				$resprints .= '<input type="submit" class="button button-edit smallpaddingimp reposition" value="' . $langs->trans('Modify') . '">';
+				$resprints .= '</form>';
+			} elseif (trim($currentDespatchAdvice) !== '') {
+				$resprints .= dol_escape_htmltag($currentDespatchAdvice);
+			} else {
+				$linkedDespatchAdvice = $this->getDespatchAdviceReference($object, 0);
+				if ($linkedDespatchAdvice !== '') {
+					$resprints .= '<span class="opacitymedium">' . dol_escape_htmltag($linkedDespatchAdvice) . '</span>';
+				}
 			}
 			$resprints .= '</td>';
 			$resprints .= '</tr>';
@@ -3889,6 +3945,53 @@ class EInvoicing
 		}
 
 		return (bool) getDolGlobalInt('EINVOICING_MERGE_LINE_CHARGES_INTO_DESCRIPTION');
+	}
+
+	/**
+	 * Despatch advice reference (BT-16) of an invoice: the one forced on the invoice, or else the reference
+	 * of the first validated shipment linked to it, directly or through its orders. A draft shipment has no
+	 * final reference yet and is skipped.
+	 *
+	 * @param	Facture	$invoice	Customer invoice
+	 * @param	int		$withforced	1 to return the reference forced on the invoice when there is one
+	 * @return	string				Reference, '' when there is none
+	 */
+	public function getDespatchAdviceReference($invoice, $withforced = 1)
+	{
+		if ((int) $invoice->id <= 0) {
+			return '';
+		}
+		if ($withforced) {
+			$forced = trim((string) $this->getExtraFieldValue($invoice->id, $invoice->element, self::EXTRAFIELD_DESPATCH_ADVICE_REFERENCE));
+			if ($forced !== '') {
+				return $forced;
+			}
+		}
+
+		// One query, run on each card display. As fetchObjectLinked(), nothing comes from a disabled module
+		// (isModEnabled('shipping'/'order') does not exist before Dolibarr 19). fk_statut -1 is cancelled.
+		if (!getDolGlobalInt('MAIN_MODULE_EXPEDITION')) {
+			return '';
+		}
+		$sql = "SELECT e.ref FROM " . MAIN_DB_PREFIX . "expedition as e";
+		$sql .= " WHERE e.entity IN (" . getEntity('expedition') . ") AND e.fk_statut > 0 AND e.ref <> ''";
+		$sql .= " AND e.rowid IN (SELECT fk_target FROM " . MAIN_DB_PREFIX . "element_element WHERE fk_source = " . ((int) $invoice->id) . " AND sourcetype = 'facture' AND targettype = 'shipping'";
+		$sql .= " UNION SELECT fk_source FROM " . MAIN_DB_PREFIX . "element_element WHERE fk_target = " . ((int) $invoice->id) . " AND targettype = 'facture' AND sourcetype = 'shipping'";
+		if (getDolGlobalInt('MAIN_MODULE_COMMANDE')) {	// Shipments of the orders linked to the invoice
+			$sql .= " UNION SELECT fk_target FROM " . MAIN_DB_PREFIX . "element_element WHERE sourcetype = 'commande' AND targettype = 'shipping' AND fk_source IN (SELECT fk_source FROM " . MAIN_DB_PREFIX . "element_element WHERE fk_target = " . ((int) $invoice->id) . " AND targettype = 'facture' AND sourcetype = 'commande' UNION SELECT fk_target FROM " . MAIN_DB_PREFIX . "element_element WHERE fk_source = " . ((int) $invoice->id) . " AND sourcetype = 'facture' AND targettype = 'commande')";
+			$sql .= " UNION SELECT fk_source FROM " . MAIN_DB_PREFIX . "element_element WHERE targettype = 'commande' AND sourcetype = 'shipping' AND fk_target IN (SELECT fk_source FROM " . MAIN_DB_PREFIX . "element_element WHERE fk_target = " . ((int) $invoice->id) . " AND targettype = 'facture' AND sourcetype = 'commande' UNION SELECT fk_target FROM " . MAIN_DB_PREFIX . "element_element WHERE fk_source = " . ((int) $invoice->id) . " AND sourcetype = 'facture' AND targettype = 'commande')";
+		}
+		$sql .= ")";
+		$sql .= " ORDER BY e.ref ASC" . $this->db->plimit(1);
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			dol_syslog(__METHOD__ . ' ' . $this->db->lasterror(), LOG_ERR);
+			return '';
+		}
+		$obj = $this->db->fetch_object($resql);
+		$this->db->free($resql);
+
+		return $obj ? trim((string) $obj->ref) : '';
 	}
 
 
